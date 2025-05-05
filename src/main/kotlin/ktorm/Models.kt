@@ -56,6 +56,17 @@ data class Folder(
 )
 
 /**
+ * Classe de données pour représenter un modèle de dossier par défaut
+ */
+data class DefaultFolderTemplate(
+    val templateID: Int? = null,
+    val templateName: String,
+    val categoryID: Int,
+    // Relations avec d'autres entités
+    var category: Category? = null
+)
+
+/**
  * Modèle de données pour un fichier
  */
 data class File(

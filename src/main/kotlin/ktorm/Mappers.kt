@@ -62,6 +62,21 @@ fun QueryRowSet.toFolder(): Folder {
 }
 
 /**
+ * Extension pour mapper un QueryRowSet vers un DefaultFolderTemplate
+ */
+fun QueryRowSet.toDefaultFolderTemplate(): DefaultFolderTemplate? {
+    return if (this[DefaultFolderTemplates.templateID] != null) {
+        DefaultFolderTemplate(
+            templateID = this[DefaultFolderTemplates.templateID],
+            templateName = this[DefaultFolderTemplates.templateName] ?: "",
+            categoryID = this[DefaultFolderTemplates.categoryID] ?: 0
+        )
+    } else {
+        null
+    }
+}
+
+/**
  * Convertit un résultat de requête en objet File
  */
 fun QueryRowSet.toFile(): File {

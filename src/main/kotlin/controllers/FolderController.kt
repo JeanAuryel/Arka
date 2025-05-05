@@ -1,7 +1,14 @@
 package controllers
 
+import ktorm.Categories
 import ktorm.DatabaseManager
+import ktorm.DefaultFolderTemplate
 import ktorm.Folder
+import org.ktorm.dsl.eq
+import org.ktorm.dsl.from
+import org.ktorm.dsl.map
+import org.ktorm.dsl.select
+import repositories.DefaultFolderTemplateRepository
 import repositories.FamilyMemberRepository
 import repositories.FolderRepository
 import java.time.LocalDateTime
@@ -13,6 +20,7 @@ class FolderController {
     private val database = DatabaseManager.getInstance()
     private val folderRepository = FolderRepository(database)
     private val familyMemberRepository = FamilyMemberRepository(database)
+    private val templateRepository = DefaultFolderTemplateRepository(database)
     private val authController = AuthController()
 
     /**
@@ -26,7 +34,40 @@ class FolderController {
      * Récupère les dossiers d'un membre par catégorie
      */
     fun getFoldersByCategory(userId: Int, categoryId: Int): List<Folder> {
-        return folderRepository.findByMemberAndCategory(userId, categoryId)
+        // Vérifier s'il y a des dossiers existants pour cette catégorie
+        val existingFolders = folderRepository.findByMemberAndCategory(userId, categoryId)
+
+        // Si aucun dossier n'existe pour cette catégorie, créer les dossiers par défaut
+        if (existingFolders.isEmpty()) {
+            return createDefaultFoldersForCategory(userId, categoryId)
+        }
+
+        return existingFolders
+    }
+
+    /**
+     * Crée les dossiers par défaut pour une catégorie
+     */
+    private fun createDefaultFoldersForCategory(userId: Int, categoryId: Int): List<Folder> {
+        val templates = templateRepository.findByCategoryId(categoryId)
+        val createdFolders = mutableListOf<Folder>()
+
+        templates.forEach { template ->
+            val folder = Folder(
+                folderName = template.templateName,
+                folderCreationDate = LocalDateTime.now(),
+                parentFolderID = null,
+                familyMemberID = userId,
+                categoryID = categoryId
+            )
+
+            val createdFolder = createFolder(folder)
+            if (createdFolder != null) {
+                createdFolders.add(createdFolder)
+            }
+        }
+
+        return createdFolders
     }
 
     /**
@@ -79,12 +120,10 @@ class FolderController {
      */
     fun hasAccessToFolder(memberID: Int, folderID: Int): Boolean {
         val folder = folderRepository.findById(folderID) ?: return false
-
         // Si l'utilisateur est le propriétaire du dossier
         if (folder.familyMemberID == memberID) {
             return true
         }
-
         // Si l'utilisateur est un parent, il peut accéder aux dossiers des membres de sa famille
         if (authController.isParent(memberID)) {
             val ownerMember = folder.familyMember
@@ -93,7 +132,46 @@ class FolderController {
                 return ownerMember.familyID == familyMemberRepository.findById(memberID)?.familyID
             }
         }
-
         return false
+    }
+
+    /**
+     * Initialise les dossiers par défaut pour un nouveau membre
+     */
+    fun initializeDefaultFoldersForMember(memberID: Int) {
+        // Récupérer toutes les catégories existantes en utilisant le repository
+        val categoryController = CategoryController()
+        val categories = categoryController.getAllCategories()
+
+        // Pour chaque catégorie, créer les dossiers par défaut
+        categories.forEach { category ->
+            val categoryId = category.categoryID
+            if (categoryId != null) {
+                createDefaultFoldersForCategory(memberID, categoryId)
+            }
+        }
+    }
+
+    /**
+     * Récupère les modèles de dossiers par défaut pour une catégorie
+     */
+    fun getDefaultFolderTemplatesForCategory(categoryId: Int): List<DefaultFolderTemplate> {
+        return templateRepository.findByCategoryId(categoryId)
+    }
+
+    /**
+     * Organise les dossiers d'un membre par catégorie
+     */
+    fun getFoldersByCategories(memberID: Int): Map<Int, List<Folder>> {
+        val folders = getAllFoldersForMember(memberID)
+        return folders.groupBy { folder -> folder.categoryID ?: 0 }
+    }
+
+    /**
+     * Récupère le nombre de dossiers par catégorie pour un membre
+     */
+    fun getFolderCountByCategory(memberID: Int): Map<Int, Int> {
+        val foldersByCategory = getFoldersByCategories(memberID)
+        return foldersByCategory.mapValues { entry -> entry.value.size }
     }
 }

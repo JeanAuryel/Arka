@@ -1,15 +1,17 @@
 package controllers
 
 import ktorm.Category
-import ktorm.DatabaseManager
+import ktorm.DefaultFolderTemplate
 import repositories.CategoryRepository
+import repositories.DefaultFolderTemplateRepository
 
 /**
  * Contrôleur pour gérer les opérations sur les catégories
  */
 class CategoryController {
-    private val database = DatabaseManager.getInstance()
+    private val database = ktorm.DatabaseManager.getInstance()
     private val categoryRepository = CategoryRepository(database)
+    private val templateRepository = DefaultFolderTemplateRepository(database)
 
     /**
      * Récupère toutes les catégories
@@ -21,8 +23,15 @@ class CategoryController {
     /**
      * Récupère une catégorie par son ID
      */
-    fun getCategoryById(categoryID: Int): Category? {
-        return categoryRepository.findById(categoryID)
+    fun getCategoryById(id: Int): Category? {
+        return categoryRepository.findById(id)
+    }
+
+    /**
+     * Récupère une catégorie par son libellé
+     */
+    fun getCategoryByLabel(label: String): Category? {
+        return categoryRepository.findByLabel(label)
     }
 
     /**
@@ -42,12 +51,21 @@ class CategoryController {
     /**
      * Supprime une catégorie
      */
-    fun deleteCategory(categoryID: Int): Boolean {
-        // Vérifier si la catégorie a des dossiers associés avant de la supprimer
-        val hasAssociatedFolders = categoryRepository.hasAssociatedFolders(categoryID)
-        if (hasAssociatedFolders) {
-            return false
-        }
-        return categoryRepository.delete(categoryID) > 0
+    fun deleteCategory(id: Int): Boolean {
+        return categoryRepository.delete(id) > 0
+    }
+
+    /**
+     * Récupère les modèles de dossiers par défaut pour une catégorie
+     */
+    fun getDefaultFolderTemplates(categoryId: Int): List<DefaultFolderTemplate> {
+        return templateRepository.findByCategoryId(categoryId)
+    }
+
+    /**
+     * Récupère tous les modèles de dossiers par défaut
+     */
+    fun getAllDefaultFolderTemplates(): List<DefaultFolderTemplate> {
+        return templateRepository.findAll()
     }
 }

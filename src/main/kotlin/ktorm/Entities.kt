@@ -49,6 +49,15 @@ object Folders : Table<Nothing>("Folder") {
 }
 
 /**
+ * Définition de la table DefaultFolderTemplate
+ */
+object DefaultFolderTemplates : Table<Nothing>("DefaultFolderTemplate") {
+    val templateID = int("TemplateID").primaryKey()
+    val templateName = varchar("TemplateName")
+    val categoryID = int("CategoryID")
+}
+
+/**
  * Définition de la table File
  */
 object Files : Table<Nothing>("File") {
