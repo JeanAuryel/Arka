@@ -8,11 +8,10 @@ import repositories.DefaultFolderTemplateRepository
 /**
  * Contrôleur pour gérer les opérations sur les catégories
  */
-class CategoryController {
-    private val database = ktorm.DatabaseManager.getInstance()
-    private val categoryRepository = CategoryRepository(database)
-    private val templateRepository = DefaultFolderTemplateRepository(database)
-
+class CategoryController(
+    private val categoryRepository: CategoryRepository,
+    private val templateRepository: DefaultFolderTemplateRepository
+) {
     /**
      * Récupère toutes les catégories
      */

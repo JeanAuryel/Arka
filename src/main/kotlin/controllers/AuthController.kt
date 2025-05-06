@@ -1,6 +1,5 @@
 package controllers
 
-import ktorm.DatabaseManager
 import ktorm.FamilyMembers
 import ktorm.toFamilyMember
 import repositories.FamilyMemberRepository
@@ -10,10 +9,7 @@ import org.ktorm.dsl.*
 /**
  * Contrôleur pour gérer l'authentification des utilisateurs
  */
-class AuthController {
-    private val database = DatabaseManager.getInstance()
-    private val memberRepository = FamilyMemberRepository(database)
-
+class AuthController(private val memberRepository: FamilyMemberRepository) {
     /**
      * Authentifie un utilisateur avec son email et son mot de passe
      * @param email Email de l'utilisateur
@@ -48,7 +44,7 @@ class AuthController {
     /**
      * Exécute une seule fois le hachage de tous les mots de passe
      */
-    fun initializePasswords() {
+    fun initializePasswords(database: org.ktorm.database.Database) {
         PasswordHasher.encryptAllPasswords(database)
     }
 }

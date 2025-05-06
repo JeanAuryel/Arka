@@ -48,7 +48,7 @@ class FamilyMemberRepository(database: Database) : BaseRepository<FamilyMember, 
     /**
      * Récupère tous les membres d'une famille
      */
-    fun findAllByFamilyId(familyId: Int): List<FamilyMember> {
+    fun findByFamilyId(familyId: Int): List<FamilyMember> {
         return database.from(FamilyMembers)
             .select()
             .where { FamilyMembers.familyID eq familyId }
@@ -57,7 +57,40 @@ class FamilyMemberRepository(database: Database) : BaseRepository<FamilyMember, 
     }
 
     /**
-     * Insère un nouveau membre
+     * Récupère tous les parents d'une famille
+     */
+    fun findParentsByFamilyId(familyId: Int): List<FamilyMember> {
+        return database.from(FamilyMembers)
+            .select()
+            .where { (FamilyMembers.familyID eq familyId) and (FamilyMembers.isParent eq true) }
+            .map { mapToEntity(it) }
+            .filterNotNull()
+    }
+
+    /**
+     * Récupère tous les enfants d'une famille
+     */
+    fun findChildrenByFamilyId(familyId: Int): List<FamilyMember> {
+        return database.from(FamilyMembers)
+            .select()
+            .where { (FamilyMembers.familyID eq familyId) and (FamilyMembers.isParent eq false) }
+            .map { mapToEntity(it) }
+            .filterNotNull()
+    }
+
+    /**
+     * Recherche des membres par prénom
+     */
+    fun findByFirstName(firstName: String): List<FamilyMember> {
+        return database.from(FamilyMembers)
+            .select()
+            .where { FamilyMembers.familyMemberFirstName like "%$firstName%" }
+            .map { mapToEntity(it) }
+            .filterNotNull()
+    }
+
+    /**
+     * Ajoute un nouveau membre
      */
     fun insert(member: FamilyMember): FamilyMember? {
         val id = database.insertAndGenerateKey(FamilyMembers) {
@@ -81,22 +114,13 @@ class FamilyMemberRepository(database: Database) : BaseRepository<FamilyMember, 
         return database.update(FamilyMembers) {
             set(it.familyMemberFirstName, member.familyMemberFirstName)
             set(it.familyMemberMail, member.familyMemberMail)
+            set(it.familyMemberPassword, member.familyMemberPassword)
             set(it.familyMemberBirthDate, member.familyMemberBirthDate)
             set(it.familyMemberGender, member.familyMemberGender)
             set(it.isParent, member.isParent)
             set(it.isAdmin, member.isAdmin)
             set(it.familyID, member.familyID)
             where { it.familyMemberID eq (member.familyMemberID ?: 0) }
-        }
-    }
-
-    /**
-     * Met à jour uniquement le mot de passe d'un membre
-     */
-    fun updatePassword(memberId: Int, hashedPassword: String): Int {
-        return database.update(FamilyMembers) {
-            set(it.familyMemberPassword, hashedPassword)
-            where { it.familyMemberID eq memberId }
         }
     }
 

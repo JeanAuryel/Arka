@@ -1,9 +1,11 @@
 package repositories
 
-import ktorm.Families
 import ktorm.Family
-import ktorm.FamilyMembers
+import ktorm.Families
 import ktorm.toFamily
+import ktorm.FamilyMember
+import ktorm.FamilyMembers
+import ktorm.toFamilyMember
 import org.ktorm.database.Database
 import org.ktorm.dsl.*
 
@@ -36,18 +38,29 @@ class FamilyRepository(database: Database) : BaseRepository<Family, Int>(databas
     }
 
     /**
-     * Récupère une famille par son label
+     * Recherche des familles par mot clé dans le nom
      */
-    fun findByLabel(label: String): Family? {
+    fun findByKeyword(keyword: String): List<Family> {
         return database.from(Families)
             .select()
-            .where { Families.familyLabel eq label }
+            .where { Families.familyLabel like "%$keyword%" }
             .map { mapToEntity(it) }
-            .firstOrNull()
+            .filterNotNull()
     }
 
     /**
-     * Insère une nouvelle famille
+     * Récupère tous les membres d'une famille
+     */
+    fun getMembers(familyId: Int): List<FamilyMember> {
+        return database.from(FamilyMembers)
+            .select()
+            .where { FamilyMembers.familyID eq familyId }
+            .map { it.toFamilyMember() }
+            .filterNotNull()
+    }
+
+    /**
+     * Ajoute une nouvelle famille
      */
     fun insert(family: Family): Family? {
         val id = database.insertAndGenerateKey(Families) {
@@ -72,17 +85,6 @@ class FamilyRepository(database: Database) : BaseRepository<Family, Int>(databas
      */
     fun delete(id: Int): Int {
         return database.delete(Families) { it.familyID eq id }
-    }
-
-    /**
-     * Vérifie si une famille a des membres
-     */
-    fun hasMembers(familyID: Int): Boolean {
-        return database.from(FamilyMembers)
-            .select(count(idColumn))
-            .where { FamilyMembers.familyID eq familyID }
-            .map { it.getInt(1) ?: 0 }
-            .first() > 0
     }
 
     override fun mapToEntity(row: QueryRowSet): Family? {

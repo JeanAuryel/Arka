@@ -17,6 +17,9 @@ dependencies {
     // Dépendance de base Compose (sans icônes Material)
     implementation(compose.desktop.currentOs)
 
+    // Koin - Injection de dépendances
+    implementation("io.insert-koin:koin-core:3.5.0")
+
     // Vos autres dépendances
     implementation("org.ktorm:ktorm-core:4.1.1")
     implementation("org.ktorm:ktorm-support-mysql:3.6.0")

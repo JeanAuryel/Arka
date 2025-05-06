@@ -1,34 +1,63 @@
 import androidx.compose.desktop.ui.tooling.preview.Preview
-import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.Window
-import controllers.AuthController
-import controllers.CategoryController
-import controllers.FileController
-import controllers.FolderController
-import ktorm.DatabaseManager
+import controllers.*
+import org.koin.core.context.startKoin
+import org.koin.dsl.module
 import org.ktorm.database.Database
-import org.ktorm.database.asIterable
+import repositories.*
 import routing.Router
 import routing.Routes
-import ui.CategoryScreen
-import ui.FamilyMemberScreen
-import ui.FolderScreen
-import ui.HomeScreen
-import ui.LoginScreen
+import ui.*
 import ui.theme.ArkaTheme
 import utils.PasswordHasher
 
+// Définition du module Koin
+val appModule = module {
+    // Base de données - Singleton
+    single {
+        Database.connect(
+            url = "jdbc:mysql://localhost:3306/Arka",
+            driver = "com.mysql.cj.jdbc.Driver",
+            user = "root",
+            password = null
+        )
+    }
+
+    // Repositories
+    single { FamilyRepository(get()) }
+    single { FamilyMemberRepository(get()) }
+    single { FolderRepository(get()) }
+    single { FileRepository(get()) }
+    single { CategoryRepository(get()) }
+    single { DefaultFolderTemplateRepository(get()) }
+
+    // Controllers - avec résolution des dépendances circulaires
+    single { AuthController(get()) }
+    single { FamilyController(get()) }
+    single { FamilyMemberController(get()) }
+
+    // FolderController a une dépendance sur AuthController
+    single { FolderController(get(), get(), get(), get()) }
+
+    // FileController a une dépendance sur FolderController
+    single { FileController(get(), get(), get()) }
+    single { CategoryController(get(), get()) }
+    single { MainController(get()) }
+
+    // Router
+    single { Router() }
+}
+
 @Composable
 @Preview
-fun AppWithDatabase(database: Database) {
-    val router = remember { Router() }
-    val authController = remember { AuthController() }
-    val folderController = remember { FolderController() }
-    val fileController = remember { FileController() }
-    val categoryController = remember { CategoryController() }
+fun AppWithDatabase() {
+    // Récupération des dépendances depuis Koin
+    val router = org.koin.java.KoinJavaComponent.getKoin().get<Router>()
+    val authController = org.koin.java.KoinJavaComponent.getKoin().get<AuthController>()
+    val database = org.koin.java.KoinJavaComponent.getKoin().get<Database>()
 
     var isAuthenticated by remember { mutableStateOf(false) }
     var currentUserId by remember { mutableStateOf<Int?>(null) }
@@ -44,28 +73,10 @@ fun AppWithDatabase(database: Database) {
 
                     // Tentative d'authentification
                     try {
-                        // D'abord, récupérer l'utilisateur par son email
-                        val sql = "SELECT FamilyMemberID, FamilyMemberPassword FROM FamilyMember WHERE FamilyMemberMail = ?"
-                        var userId: Int? = null
-                        var hashedPassword: String? = null
-
-                        database.useConnection { connection ->
-                            connection.prepareStatement(sql).use { statement ->
-                                statement.setString(1, email)
-
-                                val resultSet = statement.executeQuery()
-                                if (resultSet.next()) {
-                                    userId = resultSet.getInt("FamilyMemberID")
-                                    hashedPassword = resultSet.getString("FamilyMemberPassword")
-                                }
-                            }
-                        }
-
-                        // Ensuite, vérifier le mot de passe avec bcrypt
-                        if (userId != null && hashedPassword != null &&
-                            PasswordHasher.checkPassword(password, hashedPassword)) {
-                            println("Authentification réussie avec ID: $userId, navigation vers HOME")
-                            currentUserId = userId
+                        val member = authController.authenticate(email, password)
+                        if (member != null) {
+                            println("Authentification réussie avec ID: ${member.familyMemberID}, navigation vers HOME")
+                            currentUserId = member.familyMemberID
                             isAuthenticated = true
                             router.navigateTo(Routes.HOME)
                         } else {
@@ -113,22 +124,14 @@ fun AppWithDatabase(database: Database) {
 }
 
 fun main() = application {
-    // Configuration de la base de données
-    val database = Database.connect(
-        url = "jdbc:mysql://localhost:3306/Arka",
-        driver = "com.mysql.cj.jdbc.Driver",
-        user = "root",
-        password = null
-    )
-
-    // Initialiser le gestionnaire de base de données
-    // Utilisez le nom correct de votre méthode (setDatabase ou autre)
-    try {
-        DatabaseManager.getInstance() // Cela initialisera la base de données si nécessaire
-        println("Base de données initialisée avec succès dans le gestionnaire")
-    } catch (e: Exception) {
-        println("Erreur lors de l'initialisation du gestionnaire de base de données: ${e.message}")
+    // Initialisation de Koin
+    startKoin {
+        modules(appModule)
     }
+
+    // Récupération de la base de données depuis Koin
+    val database = org.koin.java.KoinJavaComponent.getKoin().get<Database>()
+    val authController = org.koin.java.KoinJavaComponent.getKoin().get<AuthController>()
 
     // Hacher les mots de passe au premier démarrage (à décommenter si nécessaire)
     PasswordHasher.encryptAllPasswords(database)
@@ -138,8 +141,10 @@ fun main() = application {
         database.useConnection { connection ->
             val sql = "SELECT 1"
             connection.prepareStatement(sql).use { statement ->
-                statement.executeQuery().asIterable().map {
-                    println("Connexion à la BDD réussie : " + it.getString(1))
+                statement.executeQuery().use { resultSet ->
+                    if (resultSet.next()) {
+                        println("Connexion à la BDD réussie : " + resultSet.getString(1))
+                    }
                 }
             }
         }
@@ -153,6 +158,6 @@ fun main() = application {
         onCloseRequest = ::exitApplication,
         title = "Arka - Gestion de documents familiaux"
     ) {
-        AppWithDatabase(database)
+        AppWithDatabase()
     }
 }

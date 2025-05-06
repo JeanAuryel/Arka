@@ -1,6 +1,5 @@
 package controllers
 
-import ktorm.DatabaseManager
 import ktorm.File
 import repositories.FileRepository
 import repositories.FolderRepository
@@ -9,12 +8,11 @@ import java.time.LocalDateTime
 /**
  * Contrôleur pour gérer les opérations sur les fichiers
  */
-class FileController {
-    private val database = DatabaseManager.getInstance()
-    private val fileRepository = FileRepository(database)
-    private val folderRepository = FolderRepository(database)
-    private val folderController = FolderController()
-
+class FileController(
+    private val fileRepository: FileRepository,
+    private val folderRepository: FolderRepository,
+    private val folderController: FolderController
+) {
     /**
      * Récupère tous les fichiers d'un dossier
      */

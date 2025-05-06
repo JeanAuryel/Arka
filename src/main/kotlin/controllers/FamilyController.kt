@@ -1,16 +1,12 @@
 package controllers
 
-import ktorm.DatabaseManager
 import ktorm.Family
 import repositories.FamilyRepository
 
 /**
  * Contrôleur pour gérer les opérations sur les familles
  */
-class FamilyController {
-    private val database = DatabaseManager.getInstance()
-    private val familyRepository = FamilyRepository(database)
-
+class FamilyController(private val familyRepository: FamilyRepository) {
     /**
      * Récupère toutes les familles
      */
@@ -44,10 +40,19 @@ class FamilyController {
      */
     fun deleteFamily(familyID: Int): Boolean {
         // Vérifier si la famille a des membres avant de la supprimer
-        val hasMembers = familyRepository.hasMembers(familyID)
-        if (hasMembers) {
+        val hasFamilyMembers = hasMembers(familyID)
+        if (hasFamilyMembers) {
             return false
         }
         return familyRepository.delete(familyID) > 0
+    }
+
+    /**
+     * Vérifie si une famille a des membres
+     */
+    fun hasMembers(familyID: Int): Boolean {
+        // Implémentation de la méthode manquante
+        val members = familyRepository.getMembers(familyID)
+        return members.isNotEmpty()
     }
 }

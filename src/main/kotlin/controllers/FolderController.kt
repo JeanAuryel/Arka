@@ -1,13 +1,8 @@
 package controllers
 
 import ktorm.Categories
-import ktorm.DatabaseManager
 import ktorm.DefaultFolderTemplate
 import ktorm.Folder
-import org.ktorm.dsl.eq
-import org.ktorm.dsl.from
-import org.ktorm.dsl.map
-import org.ktorm.dsl.select
 import repositories.DefaultFolderTemplateRepository
 import repositories.FamilyMemberRepository
 import repositories.FolderRepository
@@ -16,13 +11,12 @@ import java.time.LocalDateTime
 /**
  * Contrôleur pour gérer les opérations sur les dossiers
  */
-class FolderController {
-    private val database = DatabaseManager.getInstance()
-    private val folderRepository = FolderRepository(database)
-    private val familyMemberRepository = FamilyMemberRepository(database)
-    private val templateRepository = DefaultFolderTemplateRepository(database)
-    private val authController = AuthController()
-
+class FolderController(
+    private val folderRepository: FolderRepository,
+    private val familyMemberRepository: FamilyMemberRepository,
+    private val templateRepository: DefaultFolderTemplateRepository,
+    private val authController: AuthController
+) {
     /**
      * Récupère tous les dossiers d'un membre de famille
      */
@@ -138,9 +132,8 @@ class FolderController {
     /**
      * Initialise les dossiers par défaut pour un nouveau membre
      */
-    fun initializeDefaultFoldersForMember(memberID: Int) {
-        // Récupérer toutes les catégories existantes en utilisant le repository
-        val categoryController = CategoryController()
+    fun initializeDefaultFoldersForMember(memberID: Int, categoryController: CategoryController) {
+        // Récupérer toutes les catégories existantes
         val categories = categoryController.getAllCategories()
 
         // Pour chaque catégorie, créer les dossiers par défaut
