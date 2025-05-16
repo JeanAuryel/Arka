@@ -1,7 +1,5 @@
 # 📁 Arka – Gestion familiale de fichiers et dossiers
 
-![MCD Arka](./arka_desktop.png)
-
 **Arka** est une application **desktop multiplateforme** développée en **Kotlin** avec **JetBrains Compose**. Elle permet aux membres d’une famille de **gérer, stocker et partager des fichiers** au sein d’espaces personnels ou communs.  
 Chaque utilisateur peut gérer ses propres fichiers, partager des ressources avec sa famille, et gérer les permissions d’accès avec flexibilité.
 
@@ -32,14 +30,6 @@ Chaque utilisateur peut gérer ses propres fichiers, partager des ressources ave
 - **File picker** : mpfilepicker
 - **Logging** : Kotlin Logging + Logback
 - **Date/heure** : kotlinx-datetime
-
----
-
-## 🖼️ Modèle Conceptuel de Données (MCD)
-
-> Le modèle suivant structure les familles, membres, espaces, dossiers, fichiers et permissions.
-
-![MCD Arka](./arka_desktop.png)
 
 ---
 
