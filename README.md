@@ -40,9 +40,3 @@ Chaque utilisateur peut gérer ses propres fichiers, partager des ressources ave
 - Java 17+
 - IntelliJ IDEA (version Community suffisante)
 - MySQL Server
-
-### Cloner le projet
-
-```bash
-git clone https://github.com/Jeanauryel/arka.git
-cd arka
