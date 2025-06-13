@@ -5,6 +5,7 @@ import org.ktorm.entity.find
 import org.ktorm.entity.filter
 import org.ktorm.entity.toList
 import org.ktorm.dsl.*
+import org.ktorm.schema.Column
 import ktorm.*
 import java.time.LocalDateTime
 
@@ -27,6 +28,7 @@ class FamilyMemberRepository : BaseRepository<MembreFamilleEntity, MembresFamill
      * Obtient la clé primaire d'un membre
      */
     override fun MembreFamilleEntity.getPrimaryKey(): Int = this.membreFamilleId
+    override fun getPrimaryKeyColumn(): Column<Int> = MembresFamille.membreFamilleId
 
     /**
      * Met à jour un membre de famille

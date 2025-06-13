@@ -6,7 +6,11 @@ import org.ktorm.entity.sequenceOf
 import org.ktorm.entity.find
 import org.ktorm.entity.add
 import org.ktorm.entity.toList
+import org.ktorm.entity.filter
+import org.ktorm.entity.drop
+import org.ktorm.entity.take
 import org.ktorm.dsl.*
+import org.ktorm.schema.ColumnDeclaring
 import ktorm.ArkaDatabase
 
 /**
@@ -26,16 +30,31 @@ abstract class BaseRepository<E : Entity<E>, T : Table<E>> {
     abstract val table: T
 
     /**
+     * Obtient la clé primaire d'une entité
+     * Cette méthode doit être surchargée par les repositories enfants
+     *
+     * @return La valeur de la clé primaire
+     */
+    protected abstract fun E.getPrimaryKey(): Int
+
+    /**
      * Trouve une entité par son ID
      *
      * @param id L'identifiant de l'entité
      * @return L'entité trouvée ou null
      */
     open fun findById(id: Int): E? {
-        return ArkaDatabase.instance.sequenceOf(table).find {
-            it.getPrimaryKey() eq id
+        return ArkaDatabase.instance.sequenceOf(table).find { entity ->
+            // Utilisation correcte avec la colonne de la table
+            getPrimaryKeyColumn() eq id
         }
     }
+
+    /**
+     * Obtient la colonne de clé primaire de la table
+     * Doit être implémentée par les classes enfants
+     */
+    protected abstract fun getPrimaryKeyColumn(): org.ktorm.schema.Column<Int>
 
     /**
      * Trouve toutes les entités de ce type
@@ -53,7 +72,7 @@ abstract class BaseRepository<E : Entity<E>, T : Table<E>> {
      */
     open fun count(): Int {
         return ArkaDatabase.instance.from(table)
-            .select(count())
+            .select(org.ktorm.dsl.count())
             .map { it.getInt(1) }
             .first()
     }
@@ -116,7 +135,7 @@ abstract class BaseRepository<E : Entity<E>, T : Table<E>> {
      */
     open fun delete(id: Int): Int {
         return ArkaDatabase.instance.delete(table) {
-            it.getPrimaryKey() eq id
+            getPrimaryKeyColumn() eq id
         }
     }
 
@@ -137,7 +156,10 @@ abstract class BaseRepository<E : Entity<E>, T : Table<E>> {
      * @return Nombre de lignes supprimées
      */
     open fun deleteAll(): Int {
-        return ArkaDatabase.instance.delete(table) { 1 eq 1 }
+        return ArkaDatabase.instance.delete(table) {
+            // Condition qui est toujours vraie pour supprimer tout
+            getPrimaryKeyColumn() greaterEq 0
+        }
     }
 
     /**
@@ -160,7 +182,7 @@ abstract class BaseRepository<E : Entity<E>, T : Table<E>> {
      */
     protected fun countWhere(condition: (T) -> ColumnDeclaring<Boolean>): Int {
         return ArkaDatabase.instance.from(table)
-            .select(count())
+            .select(org.ktorm.dsl.count())
             .where(condition(table))
             .map { it.getInt(1) }
             .first()
@@ -175,17 +197,6 @@ abstract class BaseRepository<E : Entity<E>, T : Table<E>> {
     protected open fun isNewEntity(entity: E): Boolean {
         val primaryKey = entity.getPrimaryKey()
         return primaryKey == 0 || primaryKey < 0
-    }
-
-    /**
-     * Obtient la clé primaire d'une entité
-     * Cette méthode doit être surchargée par les repositories enfants
-     *
-     * @return La valeur de la clé primaire
-     */
-    protected open fun E.getPrimaryKey(): Int {
-        // Implémentation par défaut - doit être surchargée
-        throw NotImplementedError("getPrimaryKey() must be implemented by subclasses")
     }
 
     /**

@@ -1,513 +1,501 @@
 package controllers
 
+import repositories.PermissionRepository
+import repositories.FamilyMemberRepository
+import repositories.FileRepository
+import repositories.FolderRepository
+import org.ktorm.schema.Column
 import ktorm.*
-import repositories.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 
 /**
- * Controller pour la gestion granulaire des permissions dans Arka
- * Fournit une API unifiée pour toutes les vérifications d'accès
+ * Controller pour la gestion des permissions
+ *
+ * Responsabilités:
+ * - Vérification des permissions d'accès aux ressources
+ * - CRUD des permissions actives
+ * - Validation des droits d'accès par contexte
+ * - Gestion des expirations de permissions
+ * - Audit et traçabilité des accès
+ * - API unifiée pour toutes les vérifications de sécurité
+ *
+ * Utilisé par: Tous les controllers, UI Components, DelegationController
+ * Utilise: PermissionRepository, FamilyMemberRepository, FileRepository, FolderRepository
+ *
+ * Pattern: Controller Layer + Result Pattern (standardisé avec AuthController)
  */
 class PermissionController(
     private val permissionRepository: PermissionRepository,
-    private val memberRepository: FamilyMemberRepository
+    private val familyMemberRepository: FamilyMemberRepository,
+    private val fileRepository: FileRepository? = null,
+    private val folderRepository: FolderRepository? = null
 ) {
 
     /**
-     * Vérifie si un utilisateur a accès à une ressource spécifique
-     * Point d'entrée principal pour toutes les vérifications de permissions
-     * @param accessRequest La demande d'accès
-     * @return Le résultat de la vérification
+     * Résultats des opérations de permission - PATTERN STANDARDISÉ
      */
-    fun checkAccess(accessRequest: AccessCheckRequest): AccessCheckResult {
-        return try {
-            // 1. Vérifications de base
-            val baseCheck = performBaseChecks(accessRequest)
-            if (!baseCheck.granted) {
-                return baseCheck
-            }
+    sealed class PermissionResult<out T> {
+        data class Success<T>(val data: T) : PermissionResult<T>()
+        data class Error(val message: String, val code: PermissionErrorCode) : PermissionResult<Nothing>()
+    }
 
-            // 2. Vérifications spécifiques selon la portée
-            val specificCheck = when (accessRequest.portee) {
-                PorteePermission.FICHIER -> checkFileAccess(accessRequest)
-                PorteePermission.DOSSIER -> checkFolderAccess(accessRequest)
-                PorteePermission.CATEGORIE -> checkCategoryAccess(accessRequest)
-                PorteePermission.ESPACE_COMPLET -> checkSpaceAccess(accessRequest)
-            }
+    enum class PermissionErrorCode {
+        PERMISSION_NOT_FOUND,
+        MEMBER_NOT_FOUND,
+        RESOURCE_NOT_FOUND,
+        ACCESS_DENIED,
+        PERMISSION_EXPIRED,
+        INVALID_INPUT,
+        INTERNAL_ERROR
+    }
 
-            // 3. Combiner les résultats
-            if (specificCheck.granted) {
-                AccessCheckResult.Granted(
-                    reason = specificCheck.reason,
-                    permissionLevel = determinePermissionLevel(accessRequest),
-                    expiresAt = getPermissionExpiration(accessRequest)
+    /**
+     * Types de ressources supportées
+     */
+    enum class ResourceType {
+        FILE,
+        FOLDER,
+        CATEGORY,
+        SPACE
+    }
+
+    /**
+     * Niveaux de permission
+     */
+    enum class PermissionLevel {
+        READ,
+        WRITE,
+        DELETE,
+        ADMIN
+    }
+
+    // ================================================================
+    // MÉTHODES PRINCIPALES DE VÉRIFICATION
+    // ================================================================
+
+    /**
+     * Vérifie si un utilisateur a accès à une ressource
+     *
+     * @param userId ID de l'utilisateur
+     * @param resourceType Type de ressource
+     * @param resourceId ID de la ressource
+     * @param requiredLevel Niveau de permission requis
+     * @return Résultat de la vérification
+     */
+    suspend fun checkAccess(
+        userId: Int,
+        resourceType: ResourceType,
+        resourceId: Int,
+        requiredLevel: PermissionLevel = PermissionLevel.READ
+    ): PermissionResult<AccessResult> = withContext(Dispatchers.IO) {
+        try {
+            // Vérifier que l'utilisateur existe
+            val user = familyMemberRepository.findById(userId)
+                ?: return@withContext PermissionResult.Error(
+                    "Utilisateur non trouvé",
+                    PermissionErrorCode.MEMBER_NOT_FOUND
                 )
-            } else {
-                specificCheck
+
+            // Les admins ont accès à tout
+            if (user.estAdmin) {
+                return@withContext PermissionResult.Success(
+                    AccessResult(
+                        granted = true,
+                        reason = "Accès administrateur",
+                        level = PermissionLevel.ADMIN,
+                        expiresAt = null
+                    )
+                )
             }
+
+            // Vérifications spécifiques par type de ressource
+            val accessResult = when (resourceType) {
+                ResourceType.FILE -> checkFileAccess(userId, resourceId, requiredLevel)
+                ResourceType.FOLDER -> checkFolderAccess(userId, resourceId, requiredLevel)
+                ResourceType.CATEGORY -> checkCategoryAccess(userId, resourceId, requiredLevel)
+                ResourceType.SPACE -> checkSpaceAccess(userId, resourceId, requiredLevel)
+            }
+
+            return@withContext PermissionResult.Success(accessResult)
+
         } catch (e: Exception) {
-            AccessCheckResult.Denied("Erreur lors de la vérification: ${e.message}")
+            return@withContext PermissionResult.Error(
+                "Erreur lors de la vérification d'accès: ${e.message}",
+                PermissionErrorCode.INTERNAL_ERROR
+            )
         }
     }
 
     /**
      * Vérifie si un utilisateur peut effectuer une action spécifique
-     * @param userId L'ID de l'utilisateur
-     * @param action L'action à vérifier
-     * @param context Le contexte de l'action
-     * @return true si l'action est autorisée
+     *
+     * @param userId ID de l'utilisateur
+     * @param action Action à vérifier
+     * @param context Contexte de l'action
+     * @return Résultat de la vérification
      */
-    fun canPerformAction(userId: Int, action: UserAction, context: ActionContext): Boolean {
-        return when (action) {
-            UserAction.CREATE_FILE -> canCreateFile(userId, context.dossierId!!)
-            UserAction.READ_FILE -> canReadFile(userId, context.fichierId!!)
-            UserAction.UPDATE_FILE -> canUpdateFile(userId, context.fichierId!!)
-            UserAction.DELETE_FILE -> canDeleteFile(userId, context.fichierId!!)
-            UserAction.CREATE_FOLDER -> canCreateFolder(userId, context.categorieId!!, context.dossierParentId)
-            UserAction.READ_FOLDER -> canReadFolder(userId, context.dossierId!!)
-            UserAction.UPDATE_FOLDER -> canUpdateFolder(userId, context.dossierId!!)
-            UserAction.DELETE_FOLDER -> canDeleteFolder(userId, context.dossierId!!)
-            UserAction.SHARE_RESOURCE -> canShareResource(userId, context)
-            UserAction.MANAGE_PERMISSIONS -> canManagePermissions(userId, context)
-        }
-    }
+    suspend fun canPerformAction(
+        userId: Int,
+        action: UserAction,
+        context: ActionContext
+    ): PermissionResult<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            val canPerform = when (action) {
+                UserAction.CREATE_FILE -> canCreateFile(userId, context.folderId)
+                UserAction.READ_FILE -> canReadFile(userId, context.fileId)
+                UserAction.UPDATE_FILE -> canUpdateFile(userId, context.fileId)
+                UserAction.DELETE_FILE -> canDeleteFile(userId, context.fileId)
+                UserAction.CREATE_FOLDER -> canCreateFolder(userId, context.categoryId, context.parentFolderId)
+                UserAction.READ_FOLDER -> canReadFolder(userId, context.folderId)
+                UserAction.UPDATE_FOLDER -> canUpdateFolder(userId, context.folderId)
+                UserAction.DELETE_FOLDER -> canDeleteFolder(userId, context.folderId)
+                UserAction.MANAGE_CATEGORY -> canManageCategory(userId, context.categoryId)
+                UserAction.MANAGE_PERMISSIONS -> canManagePermissions(userId, context.familyId)
+            }
 
-    /**
-     * Obtient toutes les permissions actives d'un utilisateur
-     * @param userId L'ID de l'utilisateur
-     * @return Le résumé des permissions
-     */
-    fun getUserPermissionsSummary(userId: Int): UserPermissionsSummary {
-        return try {
-            val activePermissions = permissionRepository.findActiveByBeneficiary(userId)
-            val permissionsByScope = activePermissions.groupBy { PorteePermission.valueOf(it.portee) }
+            return@withContext PermissionResult.Success(canPerform)
 
-            val filePermissions = activePermissions
-                .filter { it.portee == PorteePermission.FICHIER.name }
-                .map { ResourcePermission(it.cibleId!!, TypePermission.valueOf(it.typePermission), it.dateExpiration) }
-
-            val folderPermissions = activePermissions
-                .filter { it.portee == PorteePermission.DOSSIER.name }
-                .map { ResourcePermission(it.cibleId!!, TypePermission.valueOf(it.typePermission), it.dateExpiration) }
-
-            val categoryPermissions = activePermissions
-                .filter { it.portee == PorteePermission.CATEGORIE.name }
-                .map { ResourcePermission(it.cibleId!!, TypePermission.valueOf(it.typePermission), it.dateExpiration) }
-
-            val hasSpaceAccess = activePermissions.any { it.portee == PorteePermission.ESPACE_COMPLET.name }
-
-            UserPermissionsSummary(
-                userId = userId,
-                filePermissions = filePermissions,
-                folderPermissions = folderPermissions,
-                categoryPermissions = categoryPermissions,
-                hasSpaceAccess = hasSpaceAccess,
-                totalActivePermissions = activePermissions.size,
-                lastUpdated = LocalDateTime.now()
+        } catch (e: Exception) {
+            return@withContext PermissionResult.Error(
+                "Erreur lors de la vérification d'action: ${e.message}",
+                PermissionErrorCode.INTERNAL_ERROR
             )
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES DE GESTION DES PERMISSIONS
+    // ================================================================
+
+    /**
+     * Récupère toutes les permissions actives d'un utilisateur
+     *
+     * @param userId ID de l'utilisateur
+     * @return Résultat avec les permissions
+     */
+    suspend fun getUserPermissions(userId: Int): PermissionResult<List<PermissionActive>> = withContext(Dispatchers.IO) {
+        try {
+            // Vérifier que l'utilisateur existe
+            val user = familyMemberRepository.findById(userId)
+                ?: return@withContext PermissionResult.Error(
+                    "Utilisateur non trouvé",
+                    PermissionErrorCode.MEMBER_NOT_FOUND
+                )
+
+            val permissions = permissionRepository.findAll()
+                .filter { it.beneficiaireId == userId && it.estActive == true }
+                .filter { !isExpired(it) }
+                .map { it.toModel() }
+
+            return@withContext PermissionResult.Success(permissions)
+
         } catch (e: Exception) {
-            println("⚠️ Erreur lors de la récupération des permissions de l'utilisateur $userId: ${e.message}")
-            UserPermissionsSummary(userId, emptyList(), emptyList(), emptyList(), false, 0, LocalDateTime.now())
+            return@withContext PermissionResult.Error(
+                "Erreur lors de la récupération des permissions: ${e.message}",
+                PermissionErrorCode.INTERNAL_ERROR
+            )
         }
     }
 
     /**
-     * Vérifie et nettoie les permissions expirées pour un utilisateur
-     * @param userId L'ID de l'utilisateur
-     * @return Le nombre de permissions nettoyées
+     * Récupère les permissions accordées par un utilisateur
+     *
+     * @param ownerId ID du propriétaire
+     * @return Résultat avec les permissions accordées
      */
-    fun cleanupExpiredPermissions(userId: Int): Int {
-        return try {
-            val userPermissions = permissionRepository.findActiveByBeneficiary(userId)
-            var cleanedCount = 0
+    suspend fun getGrantedPermissions(ownerId: Int): PermissionResult<List<PermissionActive>> = withContext(Dispatchers.IO) {
+        try {
+            val permissions = permissionRepository.findAll()
+                .filter { it.proprietaireId == ownerId && it.estActive == true }
+                .filter { !isExpired(it) }
+                .map { it.toModel() }
 
-            for (permission in userPermissions) {
-                if (permission.dateExpiration != null && permission.dateExpiration!!.isBefore(LocalDateTime.now())) {
-                    permissionRepository.deactivatePermission(permission.permissionId)
-                    cleanedCount++
-                }
-            }
+            return@withContext PermissionResult.Success(permissions)
 
-            cleanedCount
         } catch (e: Exception) {
-            println("⚠️ Erreur lors du nettoyage des permissions expirées: ${e.message}")
-            0
+            return@withContext PermissionResult.Error(
+                "Erreur lors de la récupération des permissions accordées: ${e.message}",
+                PermissionErrorCode.INTERNAL_ERROR
+            )
         }
     }
 
     /**
-     * Obtient les suggestions de permissions pour un utilisateur
-     * @param userId L'ID de l'utilisateur
-     * @param context Le contexte pour les suggestions
-     * @return Les suggestions de permissions
+     * Désactive une permission
+     *
+     * @param permissionId ID de la permission
+     * @param userId ID de l'utilisateur qui désactive (doit être propriétaire ou admin)
+     * @return Résultat de la désactivation
      */
-    fun getPermissionSuggestions(userId: Int, context: PermissionSuggestionContext): List<PermissionSuggestion> {
-        return try {
-            val suggestions = mutableListOf<PermissionSuggestion>()
+    suspend fun revokePermission(
+        permissionId: Int,
+        userId: Int
+    ): PermissionResult<PermissionActive> = withContext(Dispatchers.IO) {
+        try {
+            // Vérifier que la permission existe
+            val permission = permissionRepository.findById(permissionId)
+                ?: return@withContext PermissionResult.Error(
+                    "Permission non trouvée",
+                    PermissionErrorCode.PERMISSION_NOT_FOUND
+                )
 
-            // Suggestions basées sur l'activité récente
-            if (context.includeRecentActivity) {
-                suggestions.addAll(getRecentActivitySuggestions(userId))
+            // Vérifier les droits de révocation
+            if (!canRevokePermission(userId, permission)) {
+                return@withContext PermissionResult.Error(
+                    "Droits insuffisants pour révoquer cette permission",
+                    PermissionErrorCode.ACCESS_DENIED
+                )
             }
 
-            // Suggestions basées sur les permissions existantes
-            if (context.includeRelatedPermissions) {
-                suggestions.addAll(getRelatedPermissionSuggestions(userId))
-            }
+            // Désactiver la permission
+            permission.estActive = false
+            permissionRepository.update(permission)
 
-            // Suggestions basées sur les rôles familiaux
-            if (context.includeFamilyRoles) {
-                suggestions.addAll(getFamilyRoleSuggestions(userId))
-            }
+            return@withContext PermissionResult.Success(permission.toModel())
 
-            suggestions.distinctBy { "${it.portee}-${it.cibleId}-${it.typePermission}" }
         } catch (e: Exception) {
-            println("⚠️ Erreur lors de la génération des suggestions: ${e.message}")
-            emptyList()
+            return@withContext PermissionResult.Error(
+                "Erreur lors de la révocation: ${e.message}",
+                PermissionErrorCode.INTERNAL_ERROR
+            )
         }
     }
 
     // ================================================================
-    // MÉTHODES PRIVÉES - VÉRIFICATIONS SPÉCIFIQUES
+    // MÉTHODES PRIVÉES DE VÉRIFICATION SPÉCIFIQUES
     // ================================================================
 
-    /**
-     * Effectue les vérifications de base communes à toutes les demandes
-     */
-    private fun performBaseChecks(request: AccessCheckRequest): AccessCheckResult {
-        // 1. Vérifier que l'utilisateur existe
-        val user = memberRepository.findById(request.userId)
-        if (user == null) {
-            return AccessCheckResult.Denied("Utilisateur non trouvé")
+    private suspend fun checkFileAccess(userId: Int, fileId: Int, requiredLevel: PermissionLevel): AccessResult {
+        // TODO: Implémenter quand FileRepository sera complètement intégré
+        val file = fileRepository?.findById(fileId)
+
+        if (file == null) {
+            return AccessResult(false, "Fichier non trouvé", PermissionLevel.READ, null)
         }
 
-        // 2. Vérifier si l'utilisateur est administrateur (accès complet)
-        if (user.estAdmin) {
-            return AccessCheckResult.Granted("Accès administrateur", TypePermission.ACCES_COMPLET, null)
+        // Propriétaire a tous les droits
+        if (file.proprietaireId == userId || file.createurId == userId) {
+            return AccessResult(true, "Propriétaire du fichier", PermissionLevel.ADMIN, null)
         }
 
-        // 3. Vérifications spécifiques selon le type de demande
-        if (request.cibleId != null) {
-            // Vérifier que la cible existe (implémentation simplifiée)
-            // Dans un vrai projet, on vérifierait selon la portée
-        }
-
-        return AccessCheckResult.Granted("Vérifications de base passées", TypePermission.LECTURE, null)
+        // Vérifier les permissions déléguées
+        return checkDelegatedAccess(userId, "FICHIER", fileId, requiredLevel)
     }
 
-    /**
-     * Vérifie l'accès à un fichier
-     */
-    private fun checkFileAccess(request: AccessCheckRequest): AccessCheckResult {
-        if (request.cibleId == null) {
-            return AccessCheckResult.Denied("ID du fichier requis")
+    private suspend fun checkFolderAccess(userId: Int, folderId: Int, requiredLevel: PermissionLevel): AccessResult {
+        // TODO: Implémenter quand FolderRepository sera complètement intégré
+        val folder = folderRepository?.findById(folderId)
+
+        if (folder == null) {
+            return AccessResult(false, "Dossier non trouvé", PermissionLevel.READ, null)
         }
 
-        val hasPermission = permissionRepository.hasPermission(
-            beneficiaireId = request.userId,
-            portee = PorteePermission.FICHIER,
-            cibleId = request.cibleId,
-            typePermission = request.typePermission
-        )
-
-        return if (hasPermission) {
-            AccessCheckResult.Granted("Permission directe sur le fichier", request.typePermission, null)
-        } else {
-            AccessCheckResult.Denied("Aucune permission sur ce fichier")
+        // Propriétaire a tous les droits
+        if (folder.membreFamilleId == userId) {
+            return AccessResult(true, "Propriétaire du dossier", PermissionLevel.ADMIN, null)
         }
+
+        // Vérifier les permissions déléguées
+        return checkDelegatedAccess(userId, "DOSSIER", folderId, requiredLevel)
     }
 
-    /**
-     * Vérifie l'accès à un dossier
-     */
-    private fun checkFolderAccess(request: AccessCheckRequest): AccessCheckResult {
-        if (request.cibleId == null) {
-            return AccessCheckResult.Denied("ID du dossier requis")
-        }
-
-        val hasPermission = permissionRepository.hasPermission(
-            beneficiaireId = request.userId,
-            portee = PorteePermission.DOSSIER,
-            cibleId = request.cibleId,
-            typePermission = request.typePermission
-        )
-
-        return if (hasPermission) {
-            AccessCheckResult.Granted("Permission directe sur le dossier", request.typePermission, null)
-        } else {
-            AccessCheckResult.Denied("Aucune permission sur ce dossier")
-        }
+    private suspend fun checkCategoryAccess(userId: Int, categoryId: Int, requiredLevel: PermissionLevel): AccessResult {
+        // Vérifier les permissions déléguées sur la catégorie
+        return checkDelegatedAccess(userId, "CATEGORIE", categoryId, requiredLevel)
     }
 
-    /**
-     * Vérifie l'accès à une catégorie
-     */
-    private fun checkCategoryAccess(request: AccessCheckRequest): AccessCheckResult {
-        if (request.cibleId == null) {
-            return AccessCheckResult.Denied("ID de la catégorie requis")
-        }
-
-        val hasPermission = permissionRepository.hasPermission(
-            beneficiaireId = request.userId,
-            portee = PorteePermission.CATEGORIE,
-            cibleId = request.cibleId,
-            typePermission = request.typePermission
-        )
-
-        return if (hasPermission) {
-            AccessCheckResult.Granted("Permission sur la catégorie", request.typePermission, null)
-        } else {
-            AccessCheckResult.Denied("Aucune permission sur cette catégorie")
-        }
+    private suspend fun checkSpaceAccess(userId: Int, spaceId: Int, requiredLevel: PermissionLevel): AccessResult {
+        // Vérifier les permissions déléguées sur l'espace
+        return checkDelegatedAccess(userId, "ESPACE", spaceId, requiredLevel)
     }
 
-    /**
-     * Vérifie l'accès à l'espace complet
-     */
-    private fun checkSpaceAccess(request: AccessCheckRequest): AccessCheckResult {
-        val hasPermission = permissionRepository.hasPermission(
-            beneficiaireId = request.userId,
-            portee = PorteePermission.ESPACE_COMPLET,
-            cibleId = null,
-            typePermission = request.typePermission
-        )
+    private suspend fun checkDelegatedAccess(
+        userId: Int,
+        scope: String,
+        targetId: Int,
+        requiredLevel: PermissionLevel
+    ): AccessResult {
+        val activePermissions = permissionRepository.findAll()
+            .filter {
+                it.beneficiaireId == userId &&
+                        it.estActive == true &&
+                        it.portee == scope &&
+                        it.cibleId == targetId
+            }
 
-        return if (hasPermission) {
-            AccessCheckResult.Granted("Permission sur l'espace complet", request.typePermission, null)
-        } else {
-            AccessCheckResult.Denied("Aucune permission sur l'espace")
+        if (activePermissions.isEmpty()) {
+            return AccessResult(false, "Aucune permission trouvée", PermissionLevel.READ, null)
         }
+
+        // Prendre la permission la plus élevée
+        val permission = activePermissions.first()
+
+        // Vérifier l'expiration
+        if (isExpired(permission)) {
+            return AccessResult(false, "Permission expirée", PermissionLevel.READ, permission.dateExpiration)
+        }
+
+        // Vérifier le niveau requis
+        val grantedLevel = mapPermissionType(permission.typePermission ?: "read")
+        if (!hasRequiredLevel(grantedLevel, requiredLevel)) {
+            return AccessResult(false, "Niveau de permission insuffisant", grantedLevel, permission.dateExpiration)
+        }
+
+        return AccessResult(true, "Permission déléguée", grantedLevel, permission.dateExpiration)
     }
 
     // ================================================================
-    // MÉTHODES PRIVÉES - ACTIONS SPÉCIFIQUES
+    // MÉTHODES D'ACTION SPÉCIFIQUES
     // ================================================================
 
-    private fun canCreateFile(userId: Int, dossierId: Int): Boolean {
-        return permissionRepository.hasPermission(userId, PorteePermission.DOSSIER, dossierId, TypePermission.ECRITURE)
+    private suspend fun canCreateFile(userId: Int, folderId: Int?): Boolean {
+        if (folderId == null) return false
+        val access = checkFolderAccess(userId, folderId, PermissionLevel.WRITE)
+        return access.granted
     }
 
-    private fun canReadFile(userId: Int, fichierId: Int): Boolean {
-        return permissionRepository.hasPermission(userId, PorteePermission.FICHIER, fichierId, TypePermission.LECTURE)
+    private suspend fun canReadFile(userId: Int, fileId: Int?): Boolean {
+        if (fileId == null) return false
+        val access = checkFileAccess(userId, fileId, PermissionLevel.READ)
+        return access.granted
     }
 
-    private fun canUpdateFile(userId: Int, fichierId: Int): Boolean {
-        return permissionRepository.hasPermission(userId, PorteePermission.FICHIER, fichierId, TypePermission.ECRITURE)
+    private suspend fun canUpdateFile(userId: Int, fileId: Int?): Boolean {
+        if (fileId == null) return false
+        val access = checkFileAccess(userId, fileId, PermissionLevel.WRITE)
+        return access.granted
     }
 
-    private fun canDeleteFile(userId: Int, fichierId: Int): Boolean {
-        return permissionRepository.hasPermission(userId, PorteePermission.FICHIER, fichierId, TypePermission.SUPPRESSION)
+    private suspend fun canDeleteFile(userId: Int, fileId: Int?): Boolean {
+        if (fileId == null) return false
+        val access = checkFileAccess(userId, fileId, PermissionLevel.DELETE)
+        return access.granted
     }
 
-    private fun canCreateFolder(userId: Int, categorieId: Int, parentFolderId: Int?): Boolean {
+    private suspend fun canCreateFolder(userId: Int, categoryId: Int?, parentFolderId: Int?): Boolean {
         return if (parentFolderId != null) {
-            permissionRepository.hasPermission(userId, PorteePermission.DOSSIER, parentFolderId, TypePermission.ECRITURE)
+            val access = checkFolderAccess(userId, parentFolderId, PermissionLevel.WRITE)
+            access.granted
+        } else if (categoryId != null) {
+            val access = checkCategoryAccess(userId, categoryId, PermissionLevel.WRITE)
+            access.granted
         } else {
-            permissionRepository.hasPermission(userId, PorteePermission.CATEGORIE, categorieId, TypePermission.ECRITURE)
+            false
         }
     }
 
-    private fun canReadFolder(userId: Int, dossierId: Int): Boolean {
-        return permissionRepository.hasPermission(userId, PorteePermission.DOSSIER, dossierId, TypePermission.LECTURE)
+    private suspend fun canReadFolder(userId: Int, folderId: Int?): Boolean {
+        if (folderId == null) return false
+        val access = checkFolderAccess(userId, folderId, PermissionLevel.READ)
+        return access.granted
     }
 
-    private fun canUpdateFolder(userId: Int, dossierId: Int): Boolean {
-        return permissionRepository.hasPermission(userId, PorteePermission.DOSSIER, dossierId, TypePermission.ECRITURE)
+    private suspend fun canUpdateFolder(userId: Int, folderId: Int?): Boolean {
+        if (folderId == null) return false
+        val access = checkFolderAccess(userId, folderId, PermissionLevel.WRITE)
+        return access.granted
     }
 
-    private fun canDeleteFolder(userId: Int, dossierId: Int): Boolean {
-        return permissionRepository.hasPermission(userId, PorteePermission.DOSSIER, dossierId, TypePermission.SUPPRESSION)
+    private suspend fun canDeleteFolder(userId: Int, folderId: Int?): Boolean {
+        if (folderId == null) return false
+        val access = checkFolderAccess(userId, folderId, PermissionLevel.DELETE)
+        return access.granted
     }
 
-    private fun canShareResource(userId: Int, context: ActionContext): Boolean {
-        return when {
-            context.fichierId != null ->
-                permissionRepository.hasPermission(userId, PorteePermission.FICHIER, context.fichierId, TypePermission.ACCES_COMPLET)
-            context.dossierId != null ->
-                permissionRepository.hasPermission(userId, PorteePermission.DOSSIER, context.dossierId, TypePermission.ACCES_COMPLET)
-            else -> false
-        }
+    private suspend fun canManageCategory(userId: Int, categoryId: Int?): Boolean {
+        if (categoryId == null) return false
+        val access = checkCategoryAccess(userId, categoryId, PermissionLevel.ADMIN)
+        return access.granted
     }
 
-    private fun canManagePermissions(userId: Int, context: ActionContext): Boolean {
-        val user = memberRepository.findById(userId)
+    private suspend fun canManagePermissions(userId: Int, familyId: Int?): Boolean {
+        if (familyId == null) return false
+        val user = familyMemberRepository.findById(userId)
         return user?.estAdmin == true || user?.estResponsable == true
     }
 
     // ================================================================
-    // MÉTHODES PRIVÉES - UTILITAIRES
+    // MÉTHODES UTILITAIRES
     // ================================================================
 
-    /**
-     * Détermine le niveau de permission effectif
-     */
-    private fun determinePermissionLevel(request: AccessCheckRequest): TypePermission {
-        return try {
-            val permissions = permissionRepository.findActiveByBeneficiary(request.userId)
-            val relevantPermissions = permissions.filter {
-                it.portee == request.portee.name &&
-                        (request.cibleId == null || it.cibleId == request.cibleId)
-            }
+    private fun isExpired(permission: PermissionActiveEntity): Boolean {
+        return permission.dateExpiration?.isBefore(LocalDateTime.now()) == true
+    }
 
-            if (relevantPermissions.any { it.typePermission == TypePermission.ACCES_COMPLET.name }) {
-                TypePermission.ACCES_COMPLET
-            } else if (relevantPermissions.any { it.typePermission == TypePermission.SUPPRESSION.name }) {
-                TypePermission.SUPPRESSION
-            } else if (relevantPermissions.any { it.typePermission == TypePermission.ECRITURE.name }) {
-                TypePermission.ECRITURE
-            } else {
-                TypePermission.LECTURE
-            }
-        } catch (e: Exception) {
-            TypePermission.LECTURE
+    private fun canRevokePermission(userId: Int, permission: PermissionActiveEntity): Boolean {
+        val user = familyMemberRepository.findById(userId)
+
+        // Propriétaire peut révoquer
+        if (permission.proprietaireId == userId) return true
+
+        // Bénéficiaire peut renoncer
+        if (permission.beneficiaireId == userId) return true
+
+        // Admin peut révoquer dans sa famille
+        if (user?.estAdmin == true) {
+            val owner = familyMemberRepository.findById(permission.proprietaireId ?: 0)
+            return user.familleId == owner?.familleId
+        }
+
+        return false
+    }
+
+    private fun mapPermissionType(typePermission: String): PermissionLevel {
+        return when (typePermission.lowercase()) {
+            "read", "lecture" -> PermissionLevel.READ
+            "write", "ecriture" -> PermissionLevel.WRITE
+            "delete", "suppression" -> PermissionLevel.DELETE
+            "admin", "administration" -> PermissionLevel.ADMIN
+            else -> PermissionLevel.READ
         }
     }
 
-    /**
-     * Obtient la date d'expiration d'une permission
-     */
-    private fun getPermissionExpiration(request: AccessCheckRequest): LocalDateTime? {
-        return try {
-            val permissions = permissionRepository.findActiveByBeneficiary(request.userId)
-            permissions.find {
-                it.portee == request.portee.name &&
-                        (request.cibleId == null || it.cibleId == request.cibleId)
-            }?.dateExpiration
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /**
-     * Génère des suggestions basées sur l'activité récente
-     */
-    private fun getRecentActivitySuggestions(userId: Int): List<PermissionSuggestion> {
-        // Implémentation simplifiée - dans un vrai projet, on analyserait l'historique
-        return emptyList()
-    }
-
-    /**
-     * Génère des suggestions basées sur les permissions existantes
-     */
-    private fun getRelatedPermissionSuggestions(userId: Int): List<PermissionSuggestion> {
-        // Implémentation simplifiée
-        return emptyList()
-    }
-
-    /**
-     * Génère des suggestions basées sur les rôles familiaux
-     */
-    private fun getFamilyRoleSuggestions(userId: Int): List<PermissionSuggestion> {
-        return try {
-            val user = memberRepository.findById(userId)
-            val suggestions = mutableListOf<PermissionSuggestion>()
-
-            if (user?.estResponsable == true) {
-                suggestions.add(
-                    PermissionSuggestion(
-                        portee = PorteePermission.ESPACE_COMPLET,
-                        cibleId = null,
-                        typePermission = TypePermission.ECRITURE,
-                        raison = "Accès étendu pour responsable de famille"
-                    )
-                )
-            }
-
-            suggestions
-        } catch (e: Exception) {
-            emptyList()
-        }
+    private fun hasRequiredLevel(granted: PermissionLevel, required: PermissionLevel): Boolean {
+        val levels = listOf(PermissionLevel.READ, PermissionLevel.WRITE, PermissionLevel.DELETE, PermissionLevel.ADMIN)
+        return levels.indexOf(granted) >= levels.indexOf(required)
     }
 }
 
 // ================================================================
-// CLASSES DE DONNÉES POUR LE CONTROLLER
+// DATA CLASSES POUR LES REQUÊTES ET RÉSULTATS
 // ================================================================
 
 /**
- * Demande de vérification d'accès
+ * Résultat d'une vérification d'accès
  */
-data class AccessCheckRequest(
-    val userId: Int,
-    val portee: PorteePermission,
-    val cibleId: Int?,
-    val typePermission: TypePermission
+data class AccessResult(
+    val granted: Boolean,
+    val reason: String,
+    val level: PermissionLevel,
+    val expiresAt: LocalDateTime?
 )
+
+/**
+ * Actions utilisateur possibles
+ */
+enum class UserAction {
+    CREATE_FILE,
+    READ_FILE,
+    UPDATE_FILE,
+    DELETE_FILE,
+    CREATE_FOLDER,
+    READ_FOLDER,
+    UPDATE_FOLDER,
+    DELETE_FOLDER,
+    MANAGE_CATEGORY,
+    MANAGE_PERMISSIONS
+}
 
 /**
  * Contexte d'une action
  */
 data class ActionContext(
-    val fichierId: Int? = null,
-    val dossierId: Int? = null,
-    val categorieId: Int? = null,
-    val dossierParentId: Int? = null
+    val fileId: Int? = null,
+    val folderId: Int? = null,
+    val categoryId: Int? = null,
+    val spaceId: Int? = null,
+    val familyId: Int? = null,
+    val parentFolderId: Int? = null
 )
-
-/**
- * Actions possibles d'un utilisateur
- */
-enum class UserAction {
-    CREATE_FILE, READ_FILE, UPDATE_FILE, DELETE_FILE,
-    CREATE_FOLDER, READ_FOLDER, UPDATE_FOLDER, DELETE_FOLDER,
-    SHARE_RESOURCE, MANAGE_PERMISSIONS
-}
-
-/**
- * Permission sur une ressource
- */
-data class ResourcePermission(
-    val resourceId: Int,
-    val typePermission: TypePermission,
-    val expiresAt: LocalDateTime?
-)
-
-/**
- * Résumé des permissions d'un utilisateur
- */
-data class UserPermissionsSummary(
-    val userId: Int,
-    val filePermissions: List<ResourcePermission>,
-    val folderPermissions: List<ResourcePermission>,
-    val categoryPermissions: List<ResourcePermission>,
-    val hasSpaceAccess: Boolean,
-    val totalActivePermissions: Int,
-    val lastUpdated: LocalDateTime
-)
-
-/**
- * Contexte pour les suggestions de permissions
- */
-data class PermissionSuggestionContext(
-    val includeRecentActivity: Boolean = true,
-    val includeRelatedPermissions: Boolean = true,
-    val includeFamilyRoles: Boolean = true
-)
-
-/**
- * Suggestion de permission
- */
-data class PermissionSuggestion(
-    val portee: PorteePermission,
-    val cibleId: Int?,
-    val typePermission: TypePermission,
-    val raison: String
-)
-
-// ================================================================
-// RÉSULTATS D'OPÉRATIONS
-// ================================================================
-
-sealed class AccessCheckResult {
-    data class Granted(
-        val reason: String,
-        val permissionLevel: TypePermission,
-        val expiresAt: LocalDateTime?
-    ) : AccessCheckResult() {
-        val granted = true
-    }
-
-    data class Denied(val reason: String) : AccessCheckResult() {
-        val granted = false
-    }
-}

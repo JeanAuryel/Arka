@@ -5,11 +5,12 @@ import org.ktorm.entity.find
 import org.ktorm.entity.filter
 import org.ktorm.entity.toList
 import org.ktorm.dsl.*
+import org.ktorm.schema.Column
 import ktorm.*
 import java.time.LocalDateTime
 
 /**
- * Repository pour la gestion des familles
+ * Repository pour la gestion des familles - Exemple de correction
  *
  * Responsabilités:
  * - CRUD des familles
@@ -24,9 +25,14 @@ class FamilyRepository : BaseRepository<FamilleEntity, Familles>() {
     override val table = Familles
 
     /**
-     * Obtient la clé primaire d'une famille
+     * Implémentation requise : obtient la clé primaire d'une famille
      */
     override fun FamilleEntity.getPrimaryKey(): Int = this.familleId
+
+    /**
+     * Implémentation requise : obtient la colonne de clé primaire
+     */
+    override fun getPrimaryKeyColumn(): Column<Int> = Familles.familleId
 
     /**
      * Met à jour une famille
@@ -125,29 +131,34 @@ class FamilyRepository : BaseRepository<FamilleEntity, Familles>() {
     /**
      * Obtient les statistiques générales des familles
      *
-     * @return Objet contenant les statistiques
+     * @return Map contenant les statistiques
      */
-    fun getFamilyStatistics(): FamilyStatistics {
+    fun getFamilyStatistics(): Map<String, Any?> {
         val allFamilies = findAll()
 
         val now = LocalDateTime.now()
         val lastMonth = now.minusMonths(1)
         val lastWeek = now.minusWeeks(1)
 
-        return FamilyStatistics(
-            totalFamilies = allFamilies.size,
-            familiesCreatedLastMonth = allFamilies.count {
-                it.dateCreationFamille?.isAfter(lastMonth) == true
-            },
-            familiesCreatedLastWeek = allFamilies.count {
-                it.dateCreationFamille?.isAfter(lastWeek) == true
-            },
-            oldestFamily = allFamilies.minByOrNull {
-                it.dateCreationFamille ?: LocalDateTime.MIN
-            },
-            newestFamily = allFamilies.maxByOrNull {
-                it.dateCreationFamille ?: LocalDateTime.MIN
-            }
+        val familiesCreatedLastMonth = allFamilies.count {
+            it.dateCreationFamille?.isAfter(lastMonth) == true
+        }
+        val familiesCreatedLastWeek = allFamilies.count {
+            it.dateCreationFamille?.isAfter(lastWeek) == true
+        }
+        val oldestFamily = allFamilies.minByOrNull {
+            it.dateCreationFamille ?: LocalDateTime.MIN
+        }
+        val newestFamily = allFamilies.maxByOrNull {
+            it.dateCreationFamille ?: LocalDateTime.MIN
+        }
+
+        return mapOf(
+            "totalFamilies" to allFamilies.size,
+            "familiesCreatedLastMonth" to familiesCreatedLastMonth,
+            "familiesCreatedLastWeek" to familiesCreatedLastWeek,
+            "oldestFamilyDate" to oldestFamily?.dateCreationFamille,
+            "newestFamilyDate" to newestFamily?.dateCreationFamille
         )
     }
 
@@ -197,209 +208,65 @@ class FamilyRepository : BaseRepository<FamilleEntity, Familles>() {
      * Obtient des informations détaillées sur une famille
      *
      * @param familyId ID de la famille
-     * @return Informations détaillées ou null
+     * @return Map avec les détails ou null
      */
-    fun getFamilyDetails(familyId: Int): FamilyDetails? {
+    fun getFamilyDetails(familyId: Int): Map<String, Any?>? {
         val family = findById(familyId) ?: return null
 
         val members = ArkaDatabase.instance.sequenceOf(MembresFamille)
             .filter { it.familleId eq familyId }
             .toList()
 
-        return FamilyDetails(
-            family = family,
-            memberCount = members.size,
-            adminCount = members.count { it.estAdmin },
-            responsibleCount = members.count { it.estResponsable },
-            childrenCount = members.count { !it.estAdmin && !it.estResponsable },
-            lastMemberAdded = members.maxByOrNull {
-                it.dateAjoutMembre ?: LocalDateTime.MIN
-            }?.dateAjoutMembre
+        val adminCount = members.count { it.estAdmin }
+        val responsibleCount = members.count { it.estResponsable }
+        val childrenCount = members.count { !it.estAdmin && !it.estResponsable }
+        val lastMemberAdded = members.maxByOrNull {
+            it.dateAjoutMembre ?: LocalDateTime.MIN
+        }?.dateAjoutMembre
+
+        return mapOf(
+            "familyId" to family.familleId,
+            "familyName" to family.nomFamille,
+            "creationDate" to family.dateCreationFamille,
+            "memberCount" to members.size,
+            "adminCount" to adminCount,
+            "responsibleCount" to responsibleCount,
+            "childrenCount" to childrenCount,
+            "lastMemberAdded" to lastMemberAdded
         )
     }
 
     // ================================================================
-    // MÉTHODES DE GESTION AVANCÉE
+    // MÉTHODES DE CRÉATION AVEC VALIDATION
     // ================================================================
 
     /**
-     * Archive une famille (soft delete)
-     * Note: Pour l'instant, simple suppression. Peut être étendu plus tard.
+     * Crée une nouvelle famille avec validation
      *
-     * @param familyId ID de la famille à archiver
-     * @return true si l'archivage a réussi
+     * @param nomFamille Nom de la famille
+     * @return La famille créée ou null en cas d'erreur
      */
-    fun archiveFamily(familyId: Int): Boolean {
-        // Pour l'instant, on supprime directement
-        // Plus tard, on pourrait ajouter un champ "archived" à la table
-        return delete(familyId) > 0
-    }
+    fun createFamille(nomFamille: String): FamilleEntity? {
+        if (nomFamille.isBlank() || nomFamille.length < 2 || nomFamille.length > 100) {
+            println("Nom de famille invalide: '$nomFamille'")
+            return null
+        }
 
-    /**
-     * Supprime une famille et toutes ses données associées
-     * ATTENTION: Cette opération est irréversible !
-     *
-     * @param familyId ID de la famille à supprimer
-     * @return Résultat de l'opération
-     */
-    fun deleteFamilyCompletely(familyId: Int): FamilyDeletionResult {
-        return transaction {
-            try {
-                val family = findById(familyId)
-                    ?: return@transaction FamilyDeletionResult.FamilyNotFound
+        if (existsByName(nomFamille)) {
+            println("Une famille avec ce nom existe déjà")
+            return null
+        }
 
-                // Vérifier s'il y a des membres
-                val memberCount = getMemberCount(familyId)
-                if (memberCount > 0) {
-                    return@transaction FamilyDeletionResult.HasMembers(memberCount)
-                }
-
-                // Supprimer la famille
-                val deleted = delete(familyId)
-                if (deleted > 0) {
-                    FamilyDeletionResult.Success(family.nomFamille)
-                } else {
-                    FamilyDeletionResult.DeletionFailed
-                }
-
-            } catch (e: Exception) {
-                FamilyDeletionResult.Error(e.message ?: "Erreur inconnue")
+        return try {
+            val famille = FamilleEntity {
+                this.nomFamille = nomFamille.trim()
+                this.dateCreationFamille = LocalDateTime.now()
             }
+
+            create(famille)
+        } catch (e: Exception) {
+            println("Erreur lors de la création de la famille: ${e.message}")
+            null
         }
     }
-
-    /**
-     * Clone une famille (crée une copie avec un nouveau nom)
-     * Utile pour créer des familles avec des structures similaires
-     *
-     * @param sourceFamilyId ID de la famille source
-     * @param newFamilyName Nom de la nouvelle famille
-     * @return La nouvelle famille créée ou null en cas d'erreur
-     */
-    fun cloneFamily(sourceFamilyId: Int, newFamilyName: String): FamilleEntity? {
-        val sourceFamily = findById(sourceFamilyId) ?: return null
-
-        if (existsByName(newFamilyName)) {
-            return null // Le nom existe déjà
-        }
-
-        val newFamily = FamilleEntity {
-            nomFamille = newFamilyName.trim()
-            dateCreationFamille = LocalDateTime.now()
-        }
-
-        return create(newFamily)
-    }
-
-    // ================================================================
-    // MÉTHODES UTILITAIRES
-    // ================================================================
-
-    /**
-     * Obtient la liste des noms de toutes les familles
-     * Utile pour les interfaces de sélection
-     *
-     * @return Liste des noms de familles
-     */
-    fun getAllFamilyNames(): List<String> {
-        return ArkaDatabase.instance.sequenceOf(Familles)
-            .toList()
-            .map { it.nomFamille }
-    }
-
-    /**
-     * Vérifie la santé d'une famille
-     * (au moins un admin, pas de données corrompues, etc.)
-     *
-     * @param familyId ID de la famille
-     * @return Résultat de la vérification
-     */
-    fun checkFamilyHealth(familyId: Int): FamilyHealthCheck {
-        val family = findById(familyId)
-            ?: return FamilyHealthCheck.FamilyNotFound
-
-        val memberCount = getMemberCount(familyId)
-        val hasAdmin = hasAdmin(familyId)
-
-        return when {
-            memberCount == 0 -> FamilyHealthCheck.NoMembers
-            !hasAdmin -> FamilyHealthCheck.NoAdmin
-            else -> FamilyHealthCheck.Healthy
-        }
-    }
-
-    /**
-     * Nettoie les familles orphelines (sans membres depuis X jours)
-     * Méthode de maintenance
-     *
-     * @param daysThreshold Nombre de jours sans membres
-     * @return Nombre de familles nettoyées
-     */
-    fun cleanupOrphanedFamilies(daysThreshold: Int = 30): Int {
-        val threshold = LocalDateTime.now().minusDays(daysThreshold.toLong())
-        var cleanedCount = 0
-
-        val allFamilies = findAll()
-
-        for (family in allFamilies) {
-            val memberCount = getMemberCount(family.familleId)
-            val creationDate = family.dateCreationFamille ?: LocalDateTime.now()
-
-            if (memberCount == 0 && creationDate.isBefore(threshold)) {
-                if (delete(family.familleId) > 0) {
-                    cleanedCount++
-                }
-            }
-        }
-
-        return cleanedCount
-    }
-}
-
-// ================================================================
-// CLASSES DE DONNÉES POUR LES RÉSULTATS
-// ================================================================
-
-/**
- * Statistiques des familles
- */
-data class FamilyStatistics(
-    val totalFamilies: Int,
-    val familiesCreatedLastMonth: Int,
-    val familiesCreatedLastWeek: Int,
-    val oldestFamily: FamilleEntity?,
-    val newestFamily: FamilleEntity?
-)
-
-/**
- * Détails complets d'une famille
- */
-data class FamilyDetails(
-    val family: FamilleEntity,
-    val memberCount: Int,
-    val adminCount: Int,
-    val responsibleCount: Int,
-    val childrenCount: Int,
-    val lastMemberAdded: LocalDateTime?
-)
-
-/**
- * Résultat de suppression de famille
- */
-sealed class FamilyDeletionResult {
-    object FamilyNotFound : FamilyDeletionResult()
-    data class HasMembers(val memberCount: Int) : FamilyDeletionResult()
-    object DeletionFailed : FamilyDeletionResult()
-    data class Success(val familyName: String) : FamilyDeletionResult()
-    data class Error(val message: String) : FamilyDeletionResult()
-}
-
-/**
- * Résultat de vérification de santé de famille
- */
-sealed class FamilyHealthCheck {
-    object FamilyNotFound : FamilyHealthCheck()
-    object NoMembers : FamilyHealthCheck()
-    object NoAdmin : FamilyHealthCheck()
-    object Healthy : FamilyHealthCheck()
 }

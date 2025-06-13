@@ -5,85 +5,91 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import repositories.*
+import services.SessionService
+import services.NavigationService
+import services.HealthService
+import services.NavigationState as ServiceNavigationState
 import ktorm.*
 import java.time.LocalDateTime
 
 /**
- * Main Controller - Application orchestrator and entry point
+ * Main Controller - VERSION TEMPORAIRE SIMPLIFIÉE
  *
- * Responsibilities:
- * - Application initialization and setup
- * - Navigation state management
- * - Global application state
- * - Inter-controller communication
- * - Session management
- * - Application-wide error handling
- * - Dashboard and overview data
+ * Cette version utilise seulement les services de base disponibles :
+ * - SessionService
+ * - NavigationService
+ * - HealthService
  *
- * Design Pattern: Facade + Mediator
- * This controller acts as a facade for the UI and mediates between other controllers
+ * DashboardService et SearchService seront ajoutés quand leurs dépendances seront prêtes.
+ *
+ * Responsabilités RÉDUITES:
+ * - Authentification via SessionService
+ * - Navigation de base
+ * - Vérification de santé système
+ * - Gestion d'état minimal
  */
 class MainController(
-    private val authController: AuthController,
-    private val familyMemberController: FamilyMemberController,
-    private val categoryController: CategoryController,
-    private val folderController: FolderController,
-    private val fileController: FileController,
-    private val delegationController: DelegationController,
-    private val permissionController: PermissionController,
-    private val familyRepository: FamilyRepository
+    private val sessionService: SessionService,
+    private val navigationService: NavigationService,
+    private val healthService: HealthService
 ) {
 
     /**
-     * Application states using StateFlow for reactive UI
-     * This is a modern approach for state management in Kotlin/Compose
+     * État global de l'application (simplifié)
      */
     private val _applicationState = MutableStateFlow(ApplicationState())
     val applicationState: StateFlow<ApplicationState> = _applicationState.asStateFlow()
 
-    private val _navigationState = MutableStateFlow(NavigationState.DASHBOARD)
-    val navigationState: StateFlow<NavigationState> = _navigationState.asStateFlow()
-
-    private val _dashboardData = MutableStateFlow<DashboardData?>(null)
-    val dashboardData: StateFlow<DashboardData?> = _dashboardData.asStateFlow()
+    /**
+     * État de navigation délégué
+     */
+    val navigationState: StateFlow<ServiceNavigationState> = navigationService.navigationState
 
     /**
-     * Application-wide result wrapper
+     * Résultats standardisés
      */
-    sealed class MainResult {
-        data class Success<T>(val data: T) : MainResult()
-        data class Error(val message: String, val code: MainErrorCode) : MainResult()
+    sealed class MainResult<out T> {
+        data class Success<T>(val data: T) : MainResult<T>()
+        data class Error(val message: String, val code: MainErrorCode) : MainResult<Nothing>()
     }
 
     enum class MainErrorCode {
         INITIALIZATION_FAILED,
         SESSION_EXPIRED,
-        NETWORK_ERROR,
         PERMISSION_DENIED,
-        DATA_CORRUPTION,
         INTERNAL_ERROR
     }
 
+    // ================================================================
+    // MÉTHODES PRINCIPALES SIMPLIFIÉES
+    // ================================================================
+
     /**
-     * Initialize the application
-     * This should be called when the app starts
+     * Initialise l'application de base
      */
-    suspend fun initializeApplication(): MainResult = withContext(Dispatchers.IO) {
+    suspend fun initializeApplication(): MainResult<Unit> = withContext(Dispatchers.IO) {
         try {
             updateApplicationState { it.copy(isLoading = true, isInitialized = false) }
 
-            // Initialize database connections and verify schema
-            val dbInitResult = initializeDatabase()
-            if (dbInitResult is MainResult.Error) {
-                return@withContext dbInitResult
+            // 1. Vérifier la santé du système
+            val healthResult = healthService.initializeSystem()
+            when (healthResult) {
+                is HealthService.HealthResult.Error -> {
+                    return@withContext MainResult.Error(
+                        healthResult.message,
+                        MainErrorCode.INITIALIZATION_FAILED
+                    )
+                }
+                is HealthService.HealthResult.Success -> {
+                    // Continuer l'initialisation
+                }
             }
 
-            // Load application configuration
-            loadApplicationConfiguration()
+            // 2. Vérifier session existante
+            sessionService.checkExistingSession()
 
-            // Check for existing session
-            checkExistingSession()
+            // 3. Initialiser la navigation
+            navigationService.initializeNavigation()
 
             updateApplicationState {
                 it.copy(
@@ -104,47 +110,42 @@ class MainController(
                 )
             }
             return@withContext MainResult.Error(
-                "Échec de l'initialisation de l'application: ${e.message}",
+                "Échec de l'initialisation: ${e.message}",
                 MainErrorCode.INITIALIZATION_FAILED
             )
         }
     }
 
     /**
-     * Handle user login through AuthController
+     * Connexion utilisateur
      */
-    suspend fun login(email: String, password: String): MainResult = withContext(Dispatchers.IO) {
+    suspend fun login(email: String, password: String): MainResult<MembreFamille> = withContext(Dispatchers.IO) {
         try {
             updateApplicationState { it.copy(isLoading = true) }
 
-            val loginRequest = LoginRequest(email, password)
-            val authResult = authController.login(loginRequest)
+            val sessionResult = sessionService.authenticate(email, password)
 
-            when (authResult) {
-                is AuthController.AuthResult.Success -> {
-                    // Update application state with logged user
+            when (sessionResult) {
+                is SessionService.SessionResult.Success -> {
                     updateApplicationState {
                         it.copy(
                             isLoading = false,
                             isAuthenticated = true,
-                            currentUser = authResult.member,
+                            currentUser = sessionResult.user,
                             lastLogin = LocalDateTime.now()
                         )
                     }
 
-                    // Load dashboard data
-                    loadDashboardData()
+                    // Naviguer vers le dashboard
+                    navigationService.navigateTo(ServiceNavigationState.DASHBOARD)
 
-                    // Navigate to dashboard
-                    navigateTo(NavigationState.DASHBOARD)
-
-                    return@withContext MainResult.Success(authResult.member)
+                    return@withContext MainResult.Success(sessionResult.user)
                 }
 
-                is AuthController.AuthResult.Error -> {
+                is SessionService.SessionResult.Error -> {
                     updateApplicationState { it.copy(isLoading = false) }
                     return@withContext MainResult.Error(
-                        authResult.message,
+                        sessionResult.message,
                         MainErrorCode.PERMISSION_DENIED
                     )
                 }
@@ -165,25 +166,22 @@ class MainController(
     }
 
     /**
-     * Handle user logout
+     * Déconnexion utilisateur
      */
-    fun logout(): MainResult {
-        try {
-            authController.logout()
+    fun logout(): MainResult<Unit> {
+        return try {
+            sessionService.logout()
+            navigationService.navigateTo(ServiceNavigationState.LOGIN)
 
-            // Reset application state
+            // Reset de l'état global
             updateApplicationState {
                 ApplicationState().copy(isInitialized = true)
             }
-            _dashboardData.value = null
 
-            // Navigate to login
-            navigateTo(NavigationState.LOGIN)
-
-            return MainResult.Success(Unit)
+            MainResult.Success(Unit)
 
         } catch (e: Exception) {
-            return MainResult.Error(
+            MainResult.Error(
                 "Erreur lors de la déconnexion: ${e.message}",
                 MainErrorCode.INTERNAL_ERROR
             )
@@ -191,315 +189,71 @@ class MainController(
     }
 
     /**
-     * Load and refresh dashboard data
+     * Vérification de l'état de l'application
      */
-    suspend fun loadDashboardData(): MainResult = withContext(Dispatchers.IO) {
+    suspend fun getApplicationHealth(): MainResult<services.ApplicationHealth> = withContext(Dispatchers.IO) {
         try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext MainResult.Error(
-                    "Utilisateur non connecté",
-                    MainErrorCode.SESSION_EXPIRED
-                )
+            val healthResult = healthService.getSystemHealth()
 
-            updateApplicationState { it.copy(isLoading = true) }
-
-            // Gather dashboard data from various controllers
-            val familyMembers = familyMemberController.getFamilyMembers()
-            val accessibleCategories = categoryController.getAllAccessibleCategories()
-            val recentFiles = fileController.getRecentFiles(10)
-            val pendingDelegations = delegationController.getPendingDelegationRequests()
-
-            // Calculate statistics
-            val stats = calculateDashboardStatistics()
-
-            val dashboardData = DashboardData(
-                currentUser = currentUser,
-                familyMemberCount = when (familyMembers) {
-                    is FamilyMemberController.FamilyMemberResult.Success -> familyMembers.data.size
-                    else -> 0
-                },
-                categoryCount = when (accessibleCategories) {
-                    is CategoryController.CategoryResult.Success -> accessibleCategories.data.size
-                    else -> 0
-                },
-                recentFilesCount = when (recentFiles) {
-                    is FileController.FileResult.Success -> recentFiles.data.size
-                    else -> 0
-                },
-                pendingDelegationsCount = when (pendingDelegations) {
-                    is DelegationController.DelegationResult.Success -> pendingDelegations.data.size
-                    else -> 0
-                },
-                totalFileSize = stats.totalFileSize,
-                lastActivity = stats.lastActivity,
-                systemHealth = checkSystemHealth()
-            )
-
-            _dashboardData.value = dashboardData
-            updateApplicationState { it.copy(isLoading = false) }
-
-            return@withContext MainResult.Success(dashboardData)
-
-        } catch (e: Exception) {
-            updateApplicationState {
-                it.copy(
-                    isLoading = false,
-                    lastError = "Erreur de chargement du tableau de bord: ${e.message}"
-                )
-            }
-            return@withContext MainResult.Error(
-                "Erreur lors du chargement du tableau de bord: ${e.message}",
-                MainErrorCode.INTERNAL_ERROR
-            )
-        }
-    }
-
-    /**
-     * Navigate to a specific screen
-     */
-    fun navigateTo(destination: NavigationState) {
-        _navigationState.value = destination
-        updateApplicationState {
-            it.copy(lastNavigation = LocalDateTime.now())
-        }
-    }
-
-    /**
-     * Handle global search across the application
-     */
-    suspend fun globalSearch(query: String): MainResult = withContext(Dispatchers.IO) {
-        try {
-            if (query.isBlank()) {
-                return@withContext MainResult.Error(
-                    "Critère de recherche requis",
+            return@withContext when (healthResult) {
+                is HealthService.HealthResult.Success -> MainResult.Success(healthResult.health)
+                is HealthService.HealthResult.Error -> MainResult.Error(
+                    healthResult.message,
                     MainErrorCode.INTERNAL_ERROR
                 )
             }
 
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext MainResult.Error(
-                    "Utilisateur non connecté",
-                    MainErrorCode.SESSION_EXPIRED
-                )
-
-            // Search across different entities
-            val fileResults = fileController.searchFiles(query)
-            val folderResults = folderController.searchFolders(query)
-
-            val searchResults = GlobalSearchResults(
-                query = query,
-                files = when (fileResults) {
-                    is FileController.FileResult.Success -> fileResults.data
-                    else -> emptyList()
-                },
-                folders = when (folderResults) {
-                    is FolderController.FolderResult.Success -> folderResults.data
-                    else -> emptyList()
-                },
-                searchTime = LocalDateTime.now()
-            )
-
-            return@withContext MainResult.Success(searchResults)
-
         } catch (e: Exception) {
             return@withContext MainResult.Error(
-                "Erreur lors de la recherche: ${e.message}",
+                "Erreur lors de la vérification: ${e.message}",
                 MainErrorCode.INTERNAL_ERROR
             )
         }
+    }
+
+    // ================================================================
+    // MÉTHODES DE DÉLÉGATION
+    // ================================================================
+
+    /**
+     * Navigation
+     */
+    fun navigateTo(destination: ServiceNavigationState) {
+        navigationService.navigateTo(destination)
+        updateApplicationState { it.copy(lastNavigation = LocalDateTime.now()) }
     }
 
     /**
-     * Get application health status
+     * Getters pour l'état de session
      */
-    suspend fun getApplicationHealth(): MainResult = withContext(Dispatchers.IO) {
-        try {
-            val health = ApplicationHealth(
-                databaseConnected = checkDatabaseConnection(),
-                userSessionValid = authController.isAuthenticated(),
-                systemHealth = checkSystemHealth(),
-                lastHealthCheck = LocalDateTime.now()
-            )
+    fun getCurrentUser() = sessionService.getCurrentUser()
+    fun isAuthenticated() = sessionService.isAuthenticated()
+    fun isCurrentUserAdmin() = sessionService.isCurrentUserAdmin()
 
-            return@withContext MainResult.Success(health)
-
-        } catch (e: Exception) {
-            return@withContext MainResult.Error(
-                "Erreur lors de la vérification de l'état: ${e.message}",
-                MainErrorCode.INTERNAL_ERROR
-            )
-        }
-    }
-
-    /**
-     * Handle application shutdown
-     */
-    suspend fun shutdownApplication(): MainResult = withContext(Dispatchers.IO) {
-        try {
-            // Save any pending data
-            // Close database connections
-            // Clean up resources
-
-            updateApplicationState {
-                it.copy(isShuttingDown = true)
-            }
-
-            return@withContext MainResult.Success(Unit)
-
-        } catch (e: Exception) {
-            return@withContext MainResult.Error(
-                "Erreur lors de l'arrêt de l'application: ${e.message}",
-                MainErrorCode.INTERNAL_ERROR
-            )
-        }
-    }
-
-    // Private helper methods
+    // ================================================================
+    // MÉTHODES PRIVÉES
+    // ================================================================
 
     private fun updateApplicationState(update: (ApplicationState) -> ApplicationState) {
         _applicationState.value = update(_applicationState.value)
     }
-
-    private suspend fun initializeDatabase(): MainResult {
-        return try {
-            // Verify database connection and schema
-            // Run any necessary migrations
-            // Check table integrity
-            MainResult.Success(Unit)
-        } catch (e: Exception) {
-            MainResult.Error(
-                "Échec de l'initialisation de la base de données: ${e.message}",
-                MainErrorCode.INITIALIZATION_FAILED
-            )
-        }
-    }
-
-    private fun loadApplicationConfiguration() {
-        // Load app settings, preferences, etc.
-        updateApplicationState {
-            it.copy(
-                applicationVersion = "2.0",
-                databaseVersion = "1.0"
-            )
-        }
-    }
-
-    private fun checkExistingSession() {
-        // Check for saved session or auto-login
-        val isAuthenticated = authController.isAuthenticated()
-        updateApplicationState {
-            it.copy(
-                isAuthenticated = isAuthenticated,
-                currentUser = if (isAuthenticated) authController.getCurrentUser() else null
-            )
-        }
-    }
-
-    private suspend fun calculateDashboardStatistics(): DashboardStatistics {
-        return try {
-            val currentUser = authController.getCurrentUser()
-            if (currentUser != null) {
-                val stats = familyMemberController.getMemberStatistics(currentUser.membreFamilleId)
-                when (stats) {
-                    is FamilyMemberController.FamilyMemberResult.Success -> {
-                        DashboardStatistics(
-                            totalFileSize = stats.data.totalFileSize,
-                            lastActivity = LocalDateTime.now() // This should come from actual data
-                        )
-                    }
-                    else -> DashboardStatistics()
-                }
-            } else {
-                DashboardStatistics()
-            }
-        } catch (e: Exception) {
-            DashboardStatistics()
-        }
-    }
-
-    private fun checkSystemHealth(): SystemHealth {
-        return SystemHealth(
-            cpuUsage = 0.0, // Would implement actual monitoring
-            memoryUsage = 0.0,
-            diskSpace = 0.0,
-            status = "HEALTHY"
-        )
-    }
-
-    private suspend fun checkDatabaseConnection(): Boolean {
-        return try {
-            // Perform a simple database query
-            familyRepository.healthCheck()
-            true
-        } catch (e: Exception) {
-            false
-        }
-    }
 }
 
+// ================================================================
+// DATA CLASSES SIMPLIFIÉES
+// ================================================================
+
 /**
- * Application state data classes
+ * État global simplifié de l'application
  */
 data class ApplicationState(
     val isLoading: Boolean = false,
     val isInitialized: Boolean = false,
     val isAuthenticated: Boolean = false,
-    val isShuttingDown: Boolean = false,
     val currentUser: MembreFamille? = null,
     val lastError: String? = null,
     val lastInitialized: LocalDateTime? = null,
     val lastLogin: LocalDateTime? = null,
     val lastNavigation: LocalDateTime? = null,
-    val applicationVersion: String = "2.0",
-    val databaseVersion: String = "1.0"
-)
-
-enum class NavigationState {
-    LOGIN,
-    DASHBOARD,
-    FAMILY_MEMBERS,
-    CATEGORIES,
-    FOLDERS,
-    FILES,
-    DELEGATIONS,
-    PERMISSIONS,
-    SETTINGS,
-    PROFILE
-}
-
-data class DashboardData(
-    val currentUser: MembreFamille,
-    val familyMemberCount: Int,
-    val categoryCount: Int,
-    val recentFilesCount: Int,
-    val pendingDelegationsCount: Int,
-    val totalFileSize: Long,
-    val lastActivity: LocalDateTime,
-    val systemHealth: SystemHealth
-)
-
-data class DashboardStatistics(
-    val totalFileSize: Long = 0L,
-    val lastActivity: LocalDateTime = LocalDateTime.now()
-)
-
-data class GlobalSearchResults(
-    val query: String,
-    val files: List<Fichier>,
-    val folders: List<Dossier>,
-    val searchTime: LocalDateTime
-)
-
-data class ApplicationHealth(
-    val databaseConnected: Boolean,
-    val userSessionValid: Boolean,
-    val systemHealth: SystemHealth,
-    val lastHealthCheck: LocalDateTime
-)
-
-data class SystemHealth(
-    val cpuUsage: Double,
-    val memoryUsage: Double,
-    val diskSpace: Double,
-    val status: String
+    val applicationVersion: String = "2.0-minimal"
 )

@@ -16,7 +16,6 @@ import androidx.compose.ui.window.application
 import ktorm.ArkaDatabase
 import utils.PasswordHasher
 import di.arkaModules
-import controllers.FamilyController
 import repositories.FamilyRepository
 import org.koin.core.context.startKoin
 import org.koin.core.context.stopKoin

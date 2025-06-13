@@ -130,24 +130,27 @@ class AuthController(
             // Hash password
             val hashedPassword = passwordHasher.hashPassword(registerRequest.password)
 
-            // Create new member entity using ktorm syntax
+            // ✅ Créer l'entité avec la méthode create() existante
             val newMemberEntity = MembreFamilleEntity {
                 prenomMembre = registerRequest.firstName.trim()
                 mailMembre = registerRequest.email.lowercase().trim()
                 mdpMembre = hashedPassword
                 dateNaissanceMembre = registerRequest.dateOfBirth
                 genreMembre = registerRequest.gender
-                estResponsable = false // Default to false, can be changed by admin
-                estAdmin = false // Default to false
+                estResponsable = false
+                estAdmin = false
                 dateAjoutMembre = LocalDateTime.now()
                 familleId = registerRequest.familyId
             }
 
-            // Save to database using ktorm directly
-            ArkaDatabase.instance.sequenceOf(MembresFamille).add(newMemberEntity)
-            val createdMember = newMemberEntity.toModel()
+            // Utiliser la méthode create() du BaseRepository
+            val createdMember = familyMemberRepository.create(newMemberEntity)
+                ?: return@withContext AuthResult.Error(
+                    "Erreur lors de la création du membre",
+                    AuthErrorCode.INTERNAL_ERROR
+                )
 
-            return@withContext AuthResult.Success(createdMember)
+            return@withContext AuthResult.Success(createdMember.toModel())
 
         } catch (e: Exception) {
             return@withContext AuthResult.Error(

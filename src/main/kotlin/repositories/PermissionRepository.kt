@@ -1,82 +1,60 @@
 package repositories
 
-import ktorm.*
-import org.ktorm.dsl.*
+import org.ktorm.entity.sequenceOf
+import org.ktorm.entity.find
 import org.ktorm.entity.filter
-import org.ktorm.entity.sortedByDescending
 import org.ktorm.entity.toList
+import org.ktorm.dsl.*
 import org.ktorm.schema.Column
+import ktorm.*
 import java.time.LocalDateTime
 
 /**
- * Repository pour la gestion des permissions actives dans Arka
+ * Repository pour la gestion des permissions actives
+ *
+ * Responsabilités:
+ * - CRUD des permissions accordées
+ * - Vérification des droits d'accès (méthode critique hasPermission)
+ * - Gestion des expirations automatiques
+ * - Statistiques et audit des permissions
+ * - Nettoyage et maintenance des permissions
+ *
+ * Utilisé par: PermissionController, DelegationController, tous les controllers pour vérification d'accès
  */
-class PermissionRepository : BaseRepository<PermissionActiveEntity, org.ktorm.schema.Table<PermissionActiveEntity>>() {
+class PermissionRepository : BaseRepository<PermissionActiveEntity, PermissionsActives>() {
 
     override val table = PermissionsActives
 
-    override fun getIdColumn(entity: PermissionActiveEntity): Column<Int> = table.permissionId
+    /**
+     * Obtient la clé primaire d'une permission
+     */
+    override fun PermissionActiveEntity.getPrimaryKey(): Int = this.permissionId
+    override fun getPrimaryKeyColumn(): Column<Int> = PermissionsActives.permissionId
 
     /**
-     * Trouve toutes les permissions actives d'un bénéficiaire
-     * @param beneficiaireId L'ID du bénéficiaire
-     * @return Liste des permissions actives
+     * Met à jour une permission
      */
-    fun findActiveByBeneficiary(beneficiaireId: Int): List<PermissionActiveEntity> {
-        return try {
-            entities.filter {
-                (table.beneficiaireId eq beneficiaireId) and
-                        (table.estActive eq true) and
-                        (table.dateExpiration.isNull() or (table.dateExpiration greater LocalDateTime.now()))
-            }.sortedByDescending { table.dateOctroi }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des permissions du bénéficiaire $beneficiaireId: ${e.message}")
-            emptyList()
+    override fun update(entity: PermissionActiveEntity): Int {
+        return ArkaDatabase.instance.update(PermissionsActives) {
+            set(it.estActive, entity.estActive)
+            set(it.dateExpiration, entity.dateExpiration)
+            set(it.typePermission, entity.typePermission)
+            where { it.permissionId eq entity.permissionId }
         }
     }
 
-    /**
-     * Trouve toutes les permissions accordées par un propriétaire
-     * @param proprietaireId L'ID du propriétaire
-     * @return Liste des permissions accordées
-     */
-    fun findGrantedByOwner(proprietaireId: Int): List<PermissionActiveEntity> {
-        return try {
-            entities.filter {
-                (table.proprietaireId eq proprietaireId) and
-                        (table.estActive eq true)
-            }.sortedByDescending { table.dateOctroi }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des permissions du propriétaire $proprietaireId: ${e.message}")
-            emptyList()
-        }
-    }
-
-    /**
-     * Trouve les permissions pour une cible spécifique
-     * @param portee La portée de la permission
-     * @param cibleId L'ID de la cible
-     * @return Liste des permissions pour cette cible
-     */
-    fun findByTarget(portee: PorteePermission, cibleId: Int): List<PermissionActiveEntity> {
-        return try {
-            entities.filter {
-                (table.portee eq portee.name) and
-                        (table.cibleId eq cibleId) and
-                        (table.estActive eq true)
-            }.sortedByDescending { table.dateOctroi }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des permissions pour la cible $cibleId: ${e.message}")
-            emptyList()
-        }
-    }
+    // ================================================================
+    // MÉTHODES DE VÉRIFICATION D'ACCÈS (CRITIQUES)
+    // ================================================================
 
     /**
      * Vérifie si un bénéficiaire a une permission spécifique
-     * @param beneficiaireId L'ID du bénéficiaire
-     * @param portee La portée de la permission
-     * @param cibleId L'ID de la cible (optionnel selon la portée)
-     * @param typePermission Le type de permission requis
+     * MÉTHODE CRITIQUE utilisée par tous les controllers pour l'autorisation
+     *
+     * @param beneficiaireId ID du bénéficiaire
+     * @param portee Portée de la permission
+     * @param cibleId ID de la cible (optionnel selon la portée)
+     * @param typePermission Type de permission requis
      * @return true si la permission existe et est active
      */
     fun hasPermission(
@@ -86,178 +64,359 @@ class PermissionRepository : BaseRepository<PermissionActiveEntity, org.ktorm.sc
         typePermission: TypePermission
     ): Boolean {
         return try {
-            val permission = entities.find {
-                (table.beneficiaireId eq beneficiaireId) and
-                        (table.portee eq portee.name) and
-                        (if (cibleId != null) table.cibleId eq cibleId else table.cibleId.isNull()) and
-                        (table.estActive eq true) and
-                        (table.dateExpiration.isNull() or (table.dateExpiration greater LocalDateTime.now())) and
-                        (
-                                // Vérifier la hiérarchie des permissions
-                                when (typePermission) {
-                                    TypePermission.LECTURE -> table.typePermission.inList(
-                                        listOf(
-                                            TypePermission.LECTURE.name,
-                                            TypePermission.ECRITURE.name,
-                                            TypePermission.SUPPRESSION.name,
-                                            TypePermission.ACCES_COMPLET.name
-                                        )
-                                    )
-                                    TypePermission.ECRITURE -> table.typePermission.inList(
-                                        listOf(
-                                            TypePermission.ECRITURE.name,
-                                            TypePermission.SUPPRESSION.name,
-                                            TypePermission.ACCES_COMPLET.name
-                                        )
-                                    )
-                                    TypePermission.SUPPRESSION -> table.typePermission.inList(
-                                        listOf(
-                                            TypePermission.SUPPRESSION.name,
-                                            TypePermission.ACCES_COMPLET.name
-                                        )
-                                    )
-                                    TypePermission.ACCES_COMPLET -> table.typePermission eq TypePermission.ACCES_COMPLET.name
-                                }
-                                )
-            }
+            val maintenant = LocalDateTime.now()
+
+            // Rechercher une permission active qui couvre le type demandé
+            val permission = ArkaDatabase.instance.sequenceOf(PermissionsActives)
+                .find { permission ->
+                    val baseCondition = (permission.beneficiaireId eq beneficiaireId) and
+                            (permission.portee eq portee.name) and
+                            (permission.estActive eq true)
+
+                    // Gérer la cible (null ou valeur)
+                    val targetCondition = if (cibleId != null) {
+                        baseCondition and (permission.cibleId eq cibleId)
+                    } else {
+                        baseCondition and permission.cibleId.isNull()
+                    }
+
+                    // Vérifier l'expiration
+                    val expirationCondition = targetCondition and
+                            (permission.dateExpiration.isNull() or (permission.dateExpiration greater maintenant))
+
+                    // Vérifier la hiérarchie des permissions
+                    val permissionTypeCondition = when (typePermission) {
+                        TypePermission.LECTURE -> permission.typePermission inList listOf(
+                            TypePermission.LECTURE.name,
+                            TypePermission.ECRITURE.name,
+                            TypePermission.SUPPRESSION.name,
+                            TypePermission.ACCES_COMPLET.name
+                        )
+                        TypePermission.ECRITURE -> permission.typePermission inList listOf(
+                            TypePermission.ECRITURE.name,
+                            TypePermission.SUPPRESSION.name,
+                            TypePermission.ACCES_COMPLET.name
+                        )
+                        TypePermission.SUPPRESSION -> permission.typePermission inList listOf(
+                            TypePermission.SUPPRESSION.name,
+                            TypePermission.ACCES_COMPLET.name
+                        )
+                        TypePermission.ACCES_COMPLET -> permission.typePermission eq TypePermission.ACCES_COMPLET.name
+                    }
+
+                    expirationCondition and permissionTypeCondition
+                }
 
             permission != null
         } catch (e: Exception) {
-            println("⚠️ Erreur lors de la vérification de permission: ${e.message}")
+            println("Erreur lors de la vérification de permission: ${e.message}")
             false
         }
     }
 
     /**
-     * Crée une nouvelle permission active
-     * @param permissionData Les données de la permission
-     * @return Le résultat de l'opération
+     * Vérifie les permissions pour plusieurs cibles à la fois
+     *
+     * @param beneficiaireId ID du bénéficiaire
+     * @param checks Liste des vérifications à effectuer
+     * @return Map avec les résultats pour chaque vérification
      */
-    fun createPermission(permissionData: CreatePermissionData): RepositoryResult<PermissionActive> {
-        // Validation
-        val validationErrors = validatePermission(permissionData)
-        if (validationErrors.isNotEmpty()) {
-            return RepositoryResult.ValidationError(validationErrors)
+    fun hasPermissions(
+        beneficiaireId: Int,
+        checks: List<PermissionCheck>
+    ): Map<PermissionCheck, Boolean> {
+        return checks.associateWith { check ->
+            hasPermission(beneficiaireId, check.portee, check.cibleId, check.typePermission)
+        }
+    }
+
+    /**
+     * Récupère toutes les permissions actives d'un bénéficiaire
+     *
+     * @param beneficiaireId ID du bénéficiaire
+     * @return Liste des permissions actives non expirées
+     */
+    fun getPermissionsActivesByBeneficiaire(beneficiaireId: Int): List<PermissionActiveEntity> {
+        val maintenant = LocalDateTime.now()
+        return ArkaDatabase.instance.sequenceOf(PermissionsActives)
+            .filter {
+                (it.beneficiaireId eq beneficiaireId) and
+                        (it.estActive eq true) and
+                        (it.dateExpiration.isNull() or (it.dateExpiration greater maintenant))
+            }
+            .toList()
+            .sortedByDescending { it.dateOctroi ?: LocalDateTime.MIN }
+    }
+
+    // ================================================================
+    // MÉTHODES DE RECHERCHE PAR PROPRIÉTAIRE
+    // ================================================================
+
+    /**
+     * Récupère toutes les permissions accordées par un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
+     * @param includeInactive Inclure les permissions inactives
+     * @return Liste des permissions accordées
+     */
+    fun getPermissionsAccordeesParProprietaire(proprietaireId: Int, includeInactive: Boolean = false): List<PermissionActiveEntity> {
+        return ArkaDatabase.instance.sequenceOf(PermissionsActives)
+            .filter { permission ->
+                val baseCondition = permission.proprietaireId eq proprietaireId
+                if (includeInactive) {
+                    baseCondition
+                } else {
+                    baseCondition and (permission.estActive eq true)
+                }
+            }
+            .toList()
+            .sortedByDescending { it.dateOctroi ?: LocalDateTime.MIN }
+    }
+
+    /**
+     * Compte les permissions accordées par un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
+     * @param actives Compter seulement les permissions actives
+     * @return Nombre de permissions accordées
+     */
+    fun countPermissionsAccordees(proprietaireId: Int, actives: Boolean = true): Int {
+        return ArkaDatabase.instance.sequenceOf(PermissionsActives)
+            .filter { permission ->
+                val baseCondition = permission.proprietaireId eq proprietaireId
+                if (actives) {
+                    baseCondition and (permission.estActive eq true)
+                } else {
+                    baseCondition
+                }
+            }
+            .toList()
+            .size
+    }
+
+    // ================================================================
+    // MÉTHODES DE RECHERCHE PAR CIBLE
+    // ================================================================
+
+    /**
+     * Récupère les permissions pour une cible spécifique
+     *
+     * @param portee Portée de la permission
+     * @param cibleId ID de la cible
+     * @return Liste des permissions pour cette cible
+     */
+    fun getPermissionsByTarget(portee: PorteePermission, cibleId: Int): List<PermissionActiveEntity> {
+        return ArkaDatabase.instance.sequenceOf(PermissionsActives)
+            .filter {
+                (it.portee eq portee.name) and
+                        (it.cibleId eq cibleId) and
+                        (it.estActive eq true)
+            }
+            .toList()
+            .sortedByDescending { it.dateOctroi ?: LocalDateTime.MIN }
+    }
+
+    /**
+     * Compte les bénéficiaires ayant accès à une cible
+     *
+     * @param portee Portée de la permission
+     * @param cibleId ID de la cible
+     * @return Nombre de bénéficiaires uniques
+     */
+    fun countBeneficiairesForTarget(portee: PorteePermission, cibleId: Int): Int {
+        return ArkaDatabase.instance.sequenceOf(PermissionsActives)
+            .filter {
+                (it.portee eq portee.name) and
+                        (it.cibleId eq cibleId) and
+                        (it.estActive eq true)
+            }
+            .toList()
+            .map { it.beneficiaireId }
+            .toSet()
+            .size
+    }
+
+    // ================================================================
+    // MÉTHODES DE VALIDATION ET VÉRIFICATION
+    // ================================================================
+
+    /**
+     * Vérifie si une permission identique existe déjà
+     *
+     * @param proprietaireId ID du propriétaire
+     * @param beneficiaireId ID du bénéficiaire
+     * @param portee Portée de la permission
+     * @param cibleId ID de la cible (optionnel)
+     * @param typePermission Type de permission
+     * @return true si une permission identique existe
+     */
+    fun existsIdenticalPermission(
+        proprietaireId: Int,
+        beneficiaireId: Int,
+        portee: PorteePermission,
+        cibleId: Int?,
+        typePermission: TypePermission
+    ): Boolean {
+        return ArkaDatabase.instance.sequenceOf(PermissionsActives)
+            .find { permission ->
+                val baseCondition = (permission.proprietaireId eq proprietaireId) and
+                        (permission.beneficiaireId eq beneficiaireId) and
+                        (permission.portee eq portee.name) and
+                        (permission.typePermission eq typePermission.name) and
+                        (permission.estActive eq true)
+
+                if (cibleId != null) {
+                    baseCondition and (permission.cibleId eq cibleId)
+                } else {
+                    baseCondition and permission.cibleId.isNull()
+                }
+            } != null
+    }
+
+    // ================================================================
+    // MÉTHODES DE CRÉATION ET GESTION
+    // ================================================================
+
+    /**
+     * Crée une nouvelle permission avec validation
+     *
+     * @param proprietaireId ID du propriétaire
+     * @param beneficiaireId ID du bénéficiaire
+     * @param portee Portée de la permission
+     * @param cibleId ID de la cible (optionnel selon la portée)
+     * @param typePermission Type de permission
+     * @param dateExpiration Date d'expiration (optionnelle)
+     * @return La permission créée ou null en cas d'erreur
+     */
+    fun createPermission(
+        proprietaireId: Int,
+        beneficiaireId: Int,
+        portee: PorteePermission,
+        cibleId: Int?,
+        typePermission: TypePermission,
+        dateExpiration: LocalDateTime?
+    ): PermissionActiveEntity? {
+        // Validation de base
+        if (proprietaireId == beneficiaireId) {
+            println("Le propriétaire et le bénéficiaire ne peuvent pas être la même personne")
+            return null
+        }
+
+        if (dateExpiration != null && dateExpiration.isBefore(LocalDateTime.now())) {
+            println("La date d'expiration ne peut pas être dans le passé")
+            return null
         }
 
         // Vérifier qu'il n'y a pas déjà une permission identique active
-        if (hasExistingActivePermission(permissionData)) {
-            return RepositoryResult.Error("Une permission identique est déjà active")
+        if (existsIdenticalPermission(proprietaireId, beneficiaireId, portee, cibleId, typePermission)) {
+            println("Une permission identique est déjà active")
+            return null
         }
 
         return try {
             val permission = PermissionActiveEntity {
-                this.proprietaireId = permissionData.proprietaireId
-                this.beneficiaireId = permissionData.beneficiaireId
-                this.portee = permissionData.portee.name
-                this.cibleId = permissionData.cibleId
-                this.typePermission = permissionData.typePermission.name
+                this.proprietaireId = proprietaireId
+                this.beneficiaireId = beneficiaireId
+                this.portee = portee.name
+                this.cibleId = cibleId
+                this.typePermission = typePermission.name
                 this.dateOctroi = LocalDateTime.now()
-                this.dateExpiration = permissionData.dateExpiration
+                this.dateExpiration = dateExpiration
                 this.estActive = true
             }
 
-            if (save(permission)) {
-                RepositoryResult.Success(permission.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la création de la permission")
-            }
+            create(permission)
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la création: ${e.message}")
+            println("Erreur lors de la création de la permission: ${e.message}")
+            null
         }
     }
 
     /**
      * Désactive une permission
-     * @param permissionId L'ID de la permission
-     * @return Le résultat de l'opération
+     *
+     * @param permissionId ID de la permission
+     * @return true si la désactivation a réussi
      */
-    fun deactivatePermission(permissionId: Int): RepositoryResult<PermissionActive> {
+    fun desactiverPermission(permissionId: Int): Boolean {
         return try {
-            val permission = findById(permissionId)
-            if (permission == null) {
-                return RepositoryResult.Error("Permission non trouvée")
+            val rowsAffected = ArkaDatabase.instance.update(PermissionsActives) {
+                set(it.estActive, false)
+                where { it.permissionId eq permissionId }
             }
-
-            permission.estActive = false
-
-            if (update(permission)) {
-                RepositoryResult.Success(permission.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la désactivation")
-            }
+            rowsAffected > 0
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la désactivation: ${e.message}")
+            println("Erreur lors de la désactivation de la permission $permissionId: ${e.message}")
+            false
         }
     }
 
     /**
      * Réactive une permission
-     * @param permissionId L'ID de la permission
-     * @return Le résultat de l'opération
+     *
+     * @param permissionId ID de la permission
+     * @return true si la réactivation a réussi
      */
-    fun reactivatePermission(permissionId: Int): RepositoryResult<PermissionActive> {
+    fun reactiverPermission(permissionId: Int): Boolean {
+        val permission = findById(permissionId) ?: return false
+
+        // Vérifier que la permission n'est pas expirée
+        if (permission.dateExpiration != null && permission.dateExpiration!!.isBefore(LocalDateTime.now())) {
+            println("Impossible de réactiver une permission expirée")
+            return false
+        }
+
         return try {
-            val permission = findById(permissionId)
-            if (permission == null) {
-                return RepositoryResult.Error("Permission non trouvée")
+            val rowsAffected = ArkaDatabase.instance.update(PermissionsActives) {
+                set(it.estActive, true)
+                where { it.permissionId eq permissionId }
             }
-
-            // Vérifier que la permission n'est pas expirée
-            if (permission.dateExpiration != null && permission.dateExpiration!!.isBefore(LocalDateTime.now())) {
-                return RepositoryResult.Error("Impossible de réactiver une permission expirée")
-            }
-
-            permission.estActive = true
-
-            if (update(permission)) {
-                RepositoryResult.Success(permission.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la réactivation")
-            }
+            rowsAffected > 0
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la réactivation: ${e.message}")
+            println("Erreur lors de la réactivation de la permission $permissionId: ${e.message}")
+            false
         }
     }
 
     /**
      * Met à jour la date d'expiration d'une permission
-     * @param permissionId L'ID de la permission
-     * @param nouvelleExpiration La nouvelle date d'expiration (null = jamais)
-     * @return Le résultat de l'opération
+     *
+     * @param permissionId ID de la permission
+     * @param nouvelleExpiration Nouvelle date d'expiration (null = jamais)
+     * @return true si la mise à jour a réussi
      */
-    fun updateExpiration(permissionId: Int, nouvelleExpiration: LocalDateTime?): RepositoryResult<PermissionActive> {
+    fun updateExpiration(permissionId: Int, nouvelleExpiration: LocalDateTime?): Boolean {
+        if (nouvelleExpiration != null && nouvelleExpiration.isBefore(LocalDateTime.now())) {
+            println("La date d'expiration ne peut pas être dans le passé")
+            return false
+        }
+
         return try {
-            val permission = findById(permissionId)
-            if (permission == null) {
-                return RepositoryResult.Error("Permission non trouvée")
+            val rowsAffected = ArkaDatabase.instance.update(PermissionsActives) {
+                set(it.dateExpiration, nouvelleExpiration)
+                where { it.permissionId eq permissionId }
             }
-
-            if (nouvelleExpiration != null && nouvelleExpiration.isBefore(LocalDateTime.now())) {
-                return RepositoryResult.Error("La date d'expiration ne peut pas être dans le passé")
-            }
-
-            permission.dateExpiration = nouvelleExpiration
-
-            if (update(permission)) {
-                RepositoryResult.Success(permission.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la mise à jour")
-            }
+            rowsAffected > 0
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la mise à jour: ${e.message}")
+            println("Erreur lors de la mise à jour de l'expiration de la permission $permissionId: ${e.message}")
+            false
         }
     }
 
+    // ================================================================
+    // MÉTHODES DE RÉVOCATION EN MASSE
+    // ================================================================
+
     /**
-     * Supprime toutes les permissions pour une cible spécifique
-     * @param portee La portée de la cible
-     * @param cibleId L'ID de la cible
-     * @return Le nombre de permissions supprimées
+     * Révoque toutes les permissions pour une cible spécifique
+     *
+     * @param portee Portée de la cible
+     * @param cibleId ID de la cible
+     * @return Nombre de permissions révoquées
      */
-    fun revokeAllForTarget(portee: PorteePermission, cibleId: Int): Int {
+    fun revoquerToutesPermissionsPourCible(portee: PorteePermission, cibleId: Int): Int {
         return try {
-            database.update(PermissionsActives) {
+            ArkaDatabase.instance.update(PermissionsActives) {
                 set(it.estActive, false)
                 where {
                     (it.portee eq portee.name) and
@@ -266,222 +425,246 @@ class PermissionRepository : BaseRepository<PermissionActiveEntity, org.ktorm.sc
                 }
             }
         } catch (e: Exception) {
-            println("⚠️ Erreur lors de la révocation des permissions pour la cible $cibleId: ${e.message}")
+            println("Erreur lors de la révocation des permissions pour la cible $cibleId: ${e.message}")
             0
         }
     }
 
     /**
-     * Trouve les permissions expirées qui sont encore actives
-     * @return Liste des permissions expirées
+     * Révoque toutes les permissions d'un bénéficiaire
+     *
+     * @param beneficiaireId ID du bénéficiaire
+     * @return Nombre de permissions révoquées
      */
-    fun findExpiredPermissions(): List<PermissionActiveEntity> {
+    fun revoquerToutesPermissionsBeneficiaire(beneficiaireId: Int): Int {
         return try {
-            entities.filter {
-                (table.dateExpiration.isNotNull()) and
-                        (table.dateExpiration less LocalDateTime.now()) and
-                        (table.estActive eq true)
-            }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des permissions expirées: ${e.message}")
-            emptyList()
-        }
-    }
-
-    /**
-     * Nettoie automatiquement les permissions expirées
-     * @return Le nombre de permissions désactivées
-     */
-    fun cleanExpiredPermissions(): Int {
-        return try {
-            database.update(PermissionsActives) {
+            ArkaDatabase.instance.update(PermissionsActives) {
                 set(it.estActive, false)
                 where {
-                    (it.dateExpiration.isNotNull()) and
-                            (it.dateExpiration less LocalDateTime.now()) and
+                    (it.beneficiaireId eq beneficiaireId) and
                             (it.estActive eq true)
                 }
             }
         } catch (e: Exception) {
-            println("⚠️ Erreur lors du nettoyage des permissions expirées: ${e.message}")
+            println("Erreur lors de la révocation des permissions du bénéficiaire $beneficiaireId: ${e.message}")
             0
         }
     }
 
     /**
-     * Obtient les statistiques des permissions
-     * @param beneficiaireId Optionnel: limiter à un bénéficiaire
-     * @return Les statistiques des permissions
+     * Révoque toutes les permissions accordées par un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
+     * @return Nombre de permissions révoquées
      */
-    fun getPermissionStats(beneficiaireId: Int? = null): PermissionStats {
+    fun revoquerToutesPermissionsProprietaire(proprietaireId: Int): Int {
         return try {
-            val baseQuery = if (beneficiaireId != null) {
-                database.from(PermissionsActives).where { PermissionsActives.beneficiaireId eq beneficiaireId }
-            } else {
-                database.from(PermissionsActives)
+            ArkaDatabase.instance.update(PermissionsActives) {
+                set(it.estActive, false)
+                where {
+                    (it.proprietaireId eq proprietaireId) and
+                            (it.estActive eq true)
+                }
             }
-
-            val actives = baseQuery.select(count())
-                .where {
-                    (PermissionsActives.estActive eq true) and
-                            (PermissionsActives.dateExpiration.isNull() or (PermissionsActives.dateExpiration greater LocalDateTime.now()))
-                }
-                .map { it.getInt(1) }.first()
-
-            val inactives = baseQuery.select(count())
-                .where { PermissionsActives.estActive eq false }
-                .map { it.getInt(1) }.first()
-
-            val expirees = baseQuery.select(count())
-                .where {
-                    (PermissionsActives.dateExpiration.isNotNull()) and
-                            (PermissionsActives.dateExpiration less LocalDateTime.now())
-                }
-                .map { it.getInt(1) }.first()
-
-            // Statistiques par type
-            val typeStats = baseQuery
-                .select(PermissionsActives.typePermission, count())
-                .where { PermissionsActives.estActive eq true }
-                .groupBy(PermissionsActives.typePermission)
-                .map { row ->
-                    PermissionTypeStats(
-                        type = TypePermission.valueOf(row.getString(1) ?: "LECTURE"),
-                        count = row.getInt(2) ?: 0
-                    )
-                }
-
-            PermissionStats(
-                actives = actives,
-                inactives = inactives,
-                expirees = expirees,
-                total = actives + inactives,
-                typeStats = typeStats
-            )
         } catch (e: Exception) {
-            println("⚠️ Erreur lors du calcul des stats de permissions: ${e.message}")
-            PermissionStats(0, 0, 0, 0, emptyList())
+            println("Erreur lors de la révocation des permissions du propriétaire $proprietaireId: ${e.message}")
+            0
         }
+    }
+
+    // ================================================================
+    // MÉTHODES DE GESTION DES EXPIRATIONS
+    // ================================================================
+
+    /**
+     * Récupère les permissions expirées qui sont encore actives
+     *
+     * @return Liste des permissions expirées
+     */
+    fun getPermissionsExpirees(): List<PermissionActiveEntity> {
+        val maintenant = LocalDateTime.now()
+        return ArkaDatabase.instance.sequenceOf(PermissionsActives)
+            .filter {
+                it.dateExpiration.isNotNull() and
+                        (it.dateExpiration less maintenant) and
+                        (it.estActive eq true)
+            }
+            .toList()
+    }
+
+    /**
+     * Nettoie automatiquement les permissions expirées
+     *
+     * @return Nombre de permissions désactivées
+     */
+    fun cleanPermissionsExpirees(): Int {
+        return try {
+            val maintenant = LocalDateTime.now()
+            ArkaDatabase.instance.update(PermissionsActives) {
+                set(it.estActive, false)
+                where {
+                    it.dateExpiration.isNotNull() and
+                            (it.dateExpiration less maintenant) and
+                            (it.estActive eq true)
+                }
+            }
+        } catch (e: Exception) {
+            println("Erreur lors du nettoyage des permissions expirées: ${e.message}")
+            0
+        }
+    }
+
+    /**
+     * Récupère les permissions qui expireront bientôt
+     *
+     * @param daysAhead Nombre de jours d'avance pour l'alerte
+     * @return Liste des permissions qui expireront bientôt
+     */
+    fun getPermissionsExpirantBientot(daysAhead: Int = 7): List<PermissionActiveEntity> {
+        val maintenant = LocalDateTime.now()
+        val seuil = maintenant.plusDays(daysAhead.toLong())
+
+        return ArkaDatabase.instance.sequenceOf(PermissionsActives)
+            .filter {
+                it.dateExpiration.isNotNull() and
+                        (it.dateExpiration greater maintenant) and
+                        (it.dateExpiration lessEq seuil) and
+                        (it.estActive eq true)
+            }
+            .toList()
+            .sortedBy { it.dateExpiration }
+    }
+
+    // ================================================================
+    // MÉTHODES DE STATISTIQUES
+    // ================================================================
+
+    /**
+     * Obtient les statistiques des permissions
+     *
+     * @param beneficiaireId ID du bénéficiaire (optionnel)
+     * @return Map avec les statistiques
+     */
+    fun getStatistiquesPermissions(beneficiaireId: Int? = null): Map<String, Any> {
+        val permissions = if (beneficiaireId != null) {
+            ArkaDatabase.instance.sequenceOf(PermissionsActives)
+                .filter { it.beneficiaireId eq beneficiaireId }
+                .toList()
+        } else {
+            findAll()
+        }
+
+        val maintenant = LocalDateTime.now()
+        val actives = permissions.count {
+            it.estActive && (it.dateExpiration == null || it.dateExpiration!!.isAfter(maintenant))
+        }
+        val inactives = permissions.count { !it.estActive }
+        val expirees = permissions.count {
+            it.dateExpiration != null && it.dateExpiration!!.isBefore(maintenant)
+        }
+
+        return mapOf(
+            "total" to permissions.size,
+            "actives" to actives,
+            "inactives" to inactives,
+            "expirees" to expirees
+        )
+    }
+
+    /**
+     * Obtient les statistiques par type de permission
+     *
+     * @return Map type -> nombre de permissions
+     */
+    fun getStatistiquesParType(): Map<TypePermission, Int> {
+        val permissions = getPermissionsActivesByBeneficiaire(-1).ifEmpty { findAll() }
+        return permissions
+            .filter { it.estActive }
+            .groupBy { TypePermission.valueOf(it.typePermission) }
+            .mapValues { it.value.size }
+    }
+
+    /**
+     * Obtient les statistiques par portée
+     *
+     * @return Map portée -> nombre de permissions
+     */
+    fun getStatistiquesParPortee(): Map<PorteePermission, Int> {
+        val permissions = findAll()
+        return permissions
+            .filter { it.estActive }
+            .groupBy { PorteePermission.valueOf(it.portee) }
+            .mapValues { it.value.size }
     }
 
     /**
      * Obtient un résumé des permissions d'un bénéficiaire par portée
-     * @param beneficiaireId L'ID du bénéficiaire
+     *
+     * @param beneficiaireId ID du bénéficiaire
      * @return Map des portées et du nombre de permissions
      */
-    fun getPermissionSummary(beneficiaireId: Int): Map<PorteePermission, Int> {
+    fun getResumePermissions(beneficiaireId: Int): Map<PorteePermission, Int> {
+        val permissions = getPermissionsActivesByBeneficiaire(beneficiaireId)
+        return permissions
+            .groupBy { PorteePermission.valueOf(it.portee) }
+            .mapValues { it.value.size }
+    }
+
+    // ================================================================
+    // MÉTHODES DE SUPPRESSION ET NETTOYAGE
+    // ================================================================
+
+    /**
+     * Supprime toutes les permissions d'un membre
+     * Utilisé lors de la suppression d'un membre
+     *
+     * @param membreId ID du membre
+     * @return Nombre de permissions supprimées
+     */
+    fun deleteAllByMembre(membreId: Int): Int {
         return try {
-            database.from(PermissionsActives)
-                .select(PermissionsActives.portee, count())
-                .where {
-                    (PermissionsActives.beneficiaireId eq beneficiaireId) and
-                            (PermissionsActives.estActive eq true) and
-                            (PermissionsActives.dateExpiration.isNull() or (PermissionsActives.dateExpiration greater LocalDateTime.now()))
-                }
-                .groupBy(PermissionsActives.portee)
-                .associate { row ->
-                    PorteePermission.valueOf(row.getString(1) ?: "FICHIER") to (row.getInt(2) ?: 0)
-                }
+            val asProprietaire = ArkaDatabase.instance.delete(PermissionsActives) {
+                it.proprietaireId eq membreId
+            }
+            val asBeneficiaire = ArkaDatabase.instance.delete(PermissionsActives) {
+                it.beneficiaireId eq membreId
+            }
+            asProprietaire + asBeneficiaire
         } catch (e: Exception) {
-            println("⚠️ Erreur lors du calcul du résumé des permissions: ${e.message}")
-            emptyMap()
+            println("Erreur lors de la suppression des permissions du membre $membreId: ${e.message}")
+            0
         }
     }
 
     /**
-     * Vérifie s'il existe déjà une permission active identique
+     * Archive les anciennes permissions inactives
+     *
+     * @param daysThreshold Nombre de jours après désactivation
+     * @return Nombre de permissions archivées
      */
-    private fun hasExistingActivePermission(permissionData: CreatePermissionData): Boolean {
+    fun archiveOldInactivePermissions(daysThreshold: Int = 90): Int {
         return try {
-            val existing = entities.find {
-                (table.proprietaireId eq permissionData.proprietaireId) and
-                        (table.beneficiaireId eq permissionData.beneficiaireId) and
-                        (table.portee eq permissionData.portee.name) and
-                        (if (permissionData.cibleId != null) table.cibleId eq permissionData.cibleId else table.cibleId.isNull()) and
-                        (table.typePermission eq permissionData.typePermission.name) and
-                        (table.estActive eq true)
+            val threshold = LocalDateTime.now().minusDays(daysThreshold.toLong())
+            ArkaDatabase.instance.delete(PermissionsActives) {
+                (it.estActive eq false) and
+                        (it.dateOctroi less threshold)
             }
-
-            existing != null
         } catch (e: Exception) {
-            false
+            println("Erreur lors de l'archivage des anciennes permissions: ${e.message}")
+            0
         }
-    }
-
-    /**
-     * Valide une permission
-     */
-    private fun validatePermission(permissionData: CreatePermissionData): List<String> {
-        val errors = mutableListOf<String>()
-
-        if (permissionData.proprietaireId == permissionData.beneficiaireId) {
-            errors.add("Le propriétaire et le bénéficiaire ne peuvent pas être la même personne")
-        }
-
-        if (permissionData.dateExpiration != null && permissionData.dateExpiration.isBefore(LocalDateTime.now())) {
-            errors.add("La date d'expiration ne peut pas être dans le passé")
-        }
-
-        // Validation selon la portée
-        when (permissionData.portee) {
-            PorteePermission.DOSSIER, PorteePermission.FICHIER -> {
-                if (permissionData.cibleId == null) {
-                    errors.add("L'ID de la cible est requis pour cette portée")
-                }
-            }
-            PorteePermission.CATEGORIE -> {
-                if (permissionData.cibleId == null) {
-                    errors.add("L'ID de la catégorie est requis")
-                }
-            }
-            PorteePermission.ESPACE_COMPLET -> {
-                // Pas de cible requise pour l'espace complet
-            }
-        }
-
-        return errors
-    }
-
-    override fun validate(entity: PermissionActiveEntity): List<String> {
-        val permissionData = CreatePermissionData(
-            proprietaireId = entity.proprietaireId,
-            beneficiaireId = entity.beneficiaireId,
-            portee = PorteePermission.valueOf(entity.portee),
-            cibleId = entity.cibleId,
-            typePermission = TypePermission.valueOf(entity.typePermission),
-            dateExpiration = entity.dateExpiration
-        )
-        return validatePermission(permissionData)
     }
 }
 
+// ================================================================
+// CLASSES DE DONNÉES UTILITAIRES
+// ================================================================
+
 /**
- * Données pour créer une permission
+ * Classe pour vérifier une permission spécifique
  */
-data class CreatePermissionData(
-    val proprietaireId: Int,
-    val beneficiaireId: Int,
+data class PermissionCheck(
     val portee: PorteePermission,
     val cibleId: Int?,
-    val typePermission: TypePermission,
-    val dateExpiration: LocalDateTime?
-)
-
-/**
- * Statistiques des permissions
- */
-data class PermissionStats(
-    val actives: Int,
-    val inactives: Int,
-    val expirees: Int,
-    val total: Int,
-    val typeStats: List<PermissionTypeStats>
-)
-
-/**
- * Statistiques par type de permission
- */
-data class PermissionTypeStats(
-    val type: TypePermission,
-    val count: Int
+    val typePermission: TypePermission
 )

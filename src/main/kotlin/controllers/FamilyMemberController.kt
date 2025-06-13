@@ -1,187 +1,114 @@
 package controllers
 
+import repositories.FamilyMemberRepository
+import repositories.FamilyRepository
+import utils.PasswordHasher
+import ktorm.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import repositories.FamilyMemberRepository
-import repositories.FolderRepository
-import utils.PasswordHasher
-import ktorm.MembreFamille
-import ktorm.Genre
-import java.time.LocalDateTime
 import java.time.LocalDate
+import java.time.LocalDateTime
 
 /**
- * Controller responsible for family member management operations.
+ * Controller pour la gestion des membres de famille
  *
- * Key Features:
- * - CRUD operations on family members
- * - Role management (admin, responsible)
- * - Member profile updates
- * - Family hierarchy management
- * - Integration with permission system
+ * Responsabilités:
+ * - CRUD des membres de famille
+ * - Gestion des rôles et permissions
+ * - Validation des données membres
+ * - Statistiques et rapports membres
+ * - Opérations sur les profils utilisateur
+ * - Gestion des relations famille-membres
  *
- * Business Rules:
- * - Only admins can manage other family members
- * - Users can update their own profile
- * - At least one admin must remain in each family
- * - Children have restricted permissions by default
+ * Utilisé par: UI Components, AuthController, MainController
+ * Utilise: FamilyMemberRepository, FamilyRepository, PasswordHasher
+ *
+ * Pattern: Controller Layer + Result Pattern (standardisé avec AuthController)
  */
 class FamilyMemberController(
     private val familyMemberRepository: FamilyMemberRepository,
-    private val folderRepository: FolderRepository,
-    private val passwordHasher: PasswordHasher,
-    private val authController: AuthController,
-    private val permissionController: PermissionController
+    private val familyRepository: FamilyRepository,
+    private val passwordHasher: PasswordHasher
 ) {
 
     /**
-     * Result wrapper for family member operations
+     * Résultats des opérations sur les membres de famille - PATTERN STANDARDISÉ
      */
-    sealed class FamilyMemberResult {
-        data class Success<T>(val data: T) : FamilyMemberResult()
-        data class Error(val message: String, val code: FamilyMemberErrorCode) : FamilyMemberResult()
+    sealed class FamilyMemberResult<out T> {
+        data class Success<T>(val data: T) : FamilyMemberResult<T>()
+        data class Error(val message: String, val code: FamilyMemberErrorCode) : FamilyMemberResult<Nothing>()
     }
 
     enum class FamilyMemberErrorCode {
-        NOT_FOUND,
-        ALREADY_EXISTS,
+        MEMBER_NOT_FOUND,
+        EMAIL_ALREADY_EXISTS,
+        FAMILY_NOT_FOUND,
         INVALID_INPUT,
         PERMISSION_DENIED,
-        LAST_ADMIN,
-        EMAIL_IN_USE,
-        INTERNAL_ERROR,
-        CANNOT_DELETE_SELF,
-        AGE_RESTRICTION
+        CANNOT_DELETE_LAST_ADMIN,
+        WEAK_PASSWORD,
+        INTERNAL_ERROR
     }
 
-    /**
-     * Get all family members in the current user's family
-     */
-    suspend fun getFamilyMembers(): FamilyMemberResult = withContext(Dispatchers.IO) {
-        try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext FamilyMemberResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
-                )
-
-            val members = familyMemberRepository.findByFamilyId(currentUser.familleId)
-
-            return@withContext FamilyMemberResult.Success(members)
-
-        } catch (e: Exception) {
-            return@withContext FamilyMemberResult.Error(
-                "Erreur lors de la récupération des membres: ${e.message}",
-                FamilyMemberErrorCode.INTERNAL_ERROR
-            )
-        }
-    }
+    // ================================================================
+    // MÉTHODES DE CRÉATION ET MODIFICATION
+    // ================================================================
 
     /**
-     * Get a specific family member by ID
+     * Crée un nouveau membre de famille
+     *
+     * @param memberData Données du nouveau membre
+     * @return Résultat de la création
      */
-    suspend fun getFamilyMemberById(memberId: Int): FamilyMemberResult = withContext(Dispatchers.IO) {
+    suspend fun createFamilyMember(memberData: CreateMemberRequest): FamilyMemberResult<MembreFamille> = withContext(Dispatchers.IO) {
         try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext FamilyMemberResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
-                )
-
-            val member = familyMemberRepository.findById(memberId)
-                ?: return@withContext FamilyMemberResult.Error(
-                    "Membre non trouvé",
-                    FamilyMemberErrorCode.NOT_FOUND
-                )
-
-            // Check if user can view this member (same family or admin/responsible)
-            if (!canViewMember(currentUser, member)) {
-                return@withContext FamilyMemberResult.Error(
-                    "Accès refusé à ce membre",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
-                )
+            // Validation des données
+            val validationError = validateMemberData(memberData)
+            if (validationError != null) {
+                return@withContext FamilyMemberResult.Error(validationError, FamilyMemberErrorCode.INVALID_INPUT)
             }
 
-            return@withContext FamilyMemberResult.Success(member)
-
-        } catch (e: Exception) {
-            return@withContext FamilyMemberResult.Error(
-                "Erreur lors de la récupération du membre: ${e.message}",
-                FamilyMemberErrorCode.INTERNAL_ERROR
-            )
-        }
-    }
-
-    /**
-     * Create a new family member
-     * Only admins and responsible users can add new members
-     */
-    suspend fun createFamilyMember(
-        firstName: String,
-        email: String,
-        password: String,
-        dateOfBirth: LocalDate,
-        gender: String,
-        isResponsible: Boolean = false,
-        isAdmin: Boolean = false
-    ): FamilyMemberResult = withContext(Dispatchers.IO) {
-        try {
-            val currentUser = authController.getCurrentUser()
+            // Vérifier que la famille existe
+            val family = familyRepository.findById(memberData.familyId)
                 ?: return@withContext FamilyMemberResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
+                    "Famille non trouvée",
+                    FamilyMemberErrorCode.FAMILY_NOT_FOUND
                 )
 
-            // Permission check
-            if (!canManageFamilyMembers(currentUser)) {
-                return@withContext FamilyMemberResult.Error(
-                    "Permissions insuffisantes pour ajouter un membre",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
-                )
-            }
-
-            // Validation
-            val validationResult = validateMemberInput(firstName, email, password, dateOfBirth, gender)
-            if (validationResult != null) {
-                return@withContext validationResult
-            }
-
-            // Check if email already exists
-            if (familyMemberRepository.existsByEmail(email)) {
+            // Vérifier que l'email n'existe pas déjà
+            if (familyMemberRepository.existsByEmail(memberData.email)) {
                 return@withContext FamilyMemberResult.Error(
                     "Cette adresse email est déjà utilisée",
-                    FamilyMemberErrorCode.EMAIL_IN_USE
+                    FamilyMemberErrorCode.EMAIL_ALREADY_EXISTS
                 )
             }
 
-            // Hash password
-            val hashedPassword = passwordHasher.hashPassword(password)
+            // Valider le mot de passe
+            if (!isValidPassword(memberData.password)) {
+                return@withContext FamilyMemberResult.Error(
+                    "Le mot de passe ne respecte pas les critères de sécurité",
+                    FamilyMemberErrorCode.WEAK_PASSWORD
+                )
+            }
 
-            // Determine age and set appropriate defaults
-            val age = calculateAge(dateOfBirth)
-            val actualIsAdmin = if (age < 18) false else isAdmin // Minors cannot be admin
-            val actualIsResponsible = if (age < 18) false else isResponsible // Minors cannot be responsible
+            // Créer l'entité membre
+            val hashedPassword = passwordHasher.hashPassword(memberData.password)
+            val memberEntity = MembreFamilleEntity {
+                prenomMembre = memberData.firstName
+                mailMembre = memberData.email.lowercase().trim()
+                mdpMembre = hashedPassword
+                // Gestion explicite de la nullabilité pour dateNaissanceMembre
+                dateNaissanceMembre = memberData.birthDate ?: LocalDate.of(2000, 1, 1) // Date par défaut si null
+                genreMembre = memberData.gender ?: "" // Valeur par défaut si null
+                estResponsable = memberData.isResponsible
+                estAdmin = memberData.isAdmin
+                familleId = memberData.familyId
+                dateAjoutMembre = LocalDateTime.now()
+            }
 
-            // Create new member
-            val newMember = MembreFamille(
-                membreFamilleId = 0, // Auto-generated
-                prenomMembre = firstName.trim(),
-                mailMembre = email.lowercase().trim(),
-                mdpMembre = hashedPassword,
-                dateNaissanceMembre = dateOfBirth,
-                genreMembre = Genre.valueOf(gender),
-                estResponsable = actualIsResponsible,
-                estAdmin = actualIsAdmin,
-                dateAjoutMembre = LocalDateTime.now(),
-                familleId = currentUser.familleId
-            )
-
-            val createdMember = familyMemberRepository.create(newMember)
-
-            // Create default personal folders for the new member
-            createDefaultPersonalFolders(createdMember.membreFamilleId)
-
-            return@withContext FamilyMemberResult.Success(createdMember)
+            // Sauvegarder
+            val savedMember = familyMemberRepository.create(memberEntity)
+            return@withContext FamilyMemberResult.Success(savedMember.toModel())
 
         } catch (e: Exception) {
             return@withContext FamilyMemberResult.Error(
@@ -192,155 +119,210 @@ class FamilyMemberController(
     }
 
     /**
-     * Update a family member's profile
+     * Met à jour les informations d'un membre
+     *
+     * @param memberId ID du membre
+     * @param updateData Nouvelles données
+     * @return Résultat de la mise à jour
      */
     suspend fun updateFamilyMember(
         memberId: Int,
-        firstName: String?,
-        email: String?,
-        dateOfBirth: LocalDate?,
-        gender: String?
-    ): FamilyMemberResult = withContext(Dispatchers.IO) {
+        updateData: UpdateMemberRequest
+    ): FamilyMemberResult<MembreFamille> = withContext(Dispatchers.IO) {
         try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext FamilyMemberResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
-                )
-
-            val existingMember = familyMemberRepository.findById(memberId)
+            // Vérifier que le membre existe
+            val member = familyMemberRepository.findById(memberId)
                 ?: return@withContext FamilyMemberResult.Error(
                     "Membre non trouvé",
-                    FamilyMemberErrorCode.NOT_FOUND
+                    FamilyMemberErrorCode.MEMBER_NOT_FOUND
                 )
 
-            // Permission check: can edit self or admin can edit others
-            if (!canEditMember(currentUser, existingMember)) {
-                return@withContext FamilyMemberResult.Error(
-                    "Permissions insuffisantes pour modifier ce membre",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
-                )
+            // Validation des nouvelles données
+            val validationError = validateUpdateData(updateData)
+            if (validationError != null) {
+                return@withContext FamilyMemberResult.Error(validationError, FamilyMemberErrorCode.INVALID_INPUT)
             }
 
-            // Build updated member with only non-null values
-            var updatedMember = existingMember
-
-            firstName?.let {
-                if (it.isBlank()) {
-                    return@withContext FamilyMemberResult.Error(
-                        "Le prénom ne peut pas être vide",
-                        FamilyMemberErrorCode.INVALID_INPUT
-                    )
-                }
-                updatedMember = updatedMember.copy(prenomMembre = it.trim())
-            }
-
-            email?.let {
-                if (!isValidEmail(it)) {
-                    return@withContext FamilyMemberResult.Error(
-                        "Format d'email invalide",
-                        FamilyMemberErrorCode.INVALID_INPUT
-                    )
-                }
-                if (it != existingMember.mailMembre && familyMemberRepository.existsByEmail(it)) {
+            // Vérifier email si changé
+            if (updateData.email != null && updateData.email != member.mailMembre) {
+                if (familyMemberRepository.existsByEmail(updateData.email)) {
                     return@withContext FamilyMemberResult.Error(
                         "Cette adresse email est déjà utilisée",
-                        FamilyMemberErrorCode.EMAIL_IN_USE
+                        FamilyMemberErrorCode.EMAIL_ALREADY_EXISTS
                     )
                 }
-                updatedMember = updatedMember.copy(mailMembre = it.lowercase().trim())
             }
 
-            dateOfBirth?.let {
-                if (it.isAfter(LocalDate.now())) {
-                    return@withContext FamilyMemberResult.Error(
-                        "La date de naissance ne peut pas être dans le futur",
-                        FamilyMemberErrorCode.INVALID_INPUT
-                    )
-                }
-                updatedMember = updatedMember.copy(dateNaissanceMembre = it)
-            }
+            // Appliquer les modifications avec gestion de nullabilité
+            updateData.firstName?.let { member.prenomMembre = it }
+            updateData.email?.let { member.mailMembre = it.lowercase().trim() }
+            updateData.birthDate?.let { member.dateNaissanceMembre = it } // Seulement si non-null
+            updateData.gender?.let { member.genreMembre = it }
 
-            gender?.let {
-                if (!isValidGender(it)) {
-                    return@withContext FamilyMemberResult.Error(
-                        "Genre invalide",
-                        FamilyMemberErrorCode.INVALID_INPUT
-                    )
-                }
-                updatedMember = updatedMember.copy(genreMembre = it)
-            }
+            // Mettre à jour
+            familyMemberRepository.update(member)
 
-            familyMemberRepository.update(updatedMember)
-
-            return@withContext FamilyMemberResult.Success(updatedMember)
+            return@withContext FamilyMemberResult.Success(member.toModel())
 
         } catch (e: Exception) {
             return@withContext FamilyMemberResult.Error(
-                "Erreur lors de la mise à jour du membre: ${e.message}",
+                "Erreur lors de la mise à jour: ${e.message}",
+                FamilyMemberErrorCode.INTERNAL_ERROR
+            )
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES DE CONSULTATION
+    // ================================================================
+
+    /**
+     * Récupère un membre par son ID
+     *
+     * @param memberId ID du membre
+     * @return Résultat avec le membre trouvé
+     */
+    suspend fun getFamilyMemberById(memberId: Int): FamilyMemberResult<MembreFamille> = withContext(Dispatchers.IO) {
+        try {
+            val member = familyMemberRepository.findById(memberId)
+                ?: return@withContext FamilyMemberResult.Error(
+                    "Membre non trouvé",
+                    FamilyMemberErrorCode.MEMBER_NOT_FOUND
+                )
+
+            return@withContext FamilyMemberResult.Success(member.toModel())
+
+        } catch (e: Exception) {
+            return@withContext FamilyMemberResult.Error(
+                "Erreur lors de la récupération: ${e.message}",
                 FamilyMemberErrorCode.INTERNAL_ERROR
             )
         }
     }
 
     /**
-     * Update member roles (admin, responsible)
-     * Only admins can change roles
+     * Récupère tous les membres d'une famille
+     *
+     * @param familyId ID de la famille
+     * @return Résultat avec la liste des membres
+     */
+    suspend fun getFamilyMembers(familyId: Int): FamilyMemberResult<List<MembreFamille>> = withContext(Dispatchers.IO) {
+        try {
+            // Vérifier que la famille existe
+            val family = familyRepository.findById(familyId)
+                ?: return@withContext FamilyMemberResult.Error(
+                    "Famille non trouvée",
+                    FamilyMemberErrorCode.FAMILY_NOT_FOUND
+                )
+
+            val members = familyMemberRepository.findByFamilyId(familyId)
+            val memberModels = members.map { it.toModel() }
+
+            return@withContext FamilyMemberResult.Success(memberModels)
+
+        } catch (e: Exception) {
+            return@withContext FamilyMemberResult.Error(
+                "Erreur lors de la récupération des membres: ${e.message}",
+                FamilyMemberErrorCode.INTERNAL_ERROR
+            )
+        }
+    }
+
+    /**
+     * Récupère les administrateurs d'une famille
+     *
+     * @param familyId ID de la famille
+     * @return Résultat avec la liste des administrateurs
+     */
+    suspend fun getFamilyAdmins(familyId: Int): FamilyMemberResult<List<MembreFamille>> = withContext(Dispatchers.IO) {
+        try {
+            val admins = familyMemberRepository.findAdminsByFamilyId(familyId)
+            val adminModels = admins.map { it.toModel() }
+
+            return@withContext FamilyMemberResult.Success(adminModels)
+
+        } catch (e: Exception) {
+            return@withContext FamilyMemberResult.Error(
+                "Erreur lors de la récupération des administrateurs: ${e.message}",
+                FamilyMemberErrorCode.INTERNAL_ERROR
+            )
+        }
+    }
+
+    /**
+     * Recherche des membres par nom
+     *
+     * @param searchTerm Terme de recherche
+     * @param familyId ID de la famille (optionnel)
+     * @return Résultat avec les membres trouvés
+     */
+    suspend fun searchMembers(
+        searchTerm: String,
+        familyId: Int? = null
+    ): FamilyMemberResult<List<MembreFamille>> = withContext(Dispatchers.IO) {
+        try {
+            if (searchTerm.isBlank()) {
+                return@withContext FamilyMemberResult.Error(
+                    "Terme de recherche requis",
+                    FamilyMemberErrorCode.INVALID_INPUT
+                )
+            }
+
+            val members = familyMemberRepository.searchByName(searchTerm, familyId)
+            val memberModels = members.map { it.toModel() }
+
+            return@withContext FamilyMemberResult.Success(memberModels)
+
+        } catch (e: Exception) {
+            return@withContext FamilyMemberResult.Error(
+                "Erreur lors de la recherche: ${e.message}",
+                FamilyMemberErrorCode.INTERNAL_ERROR
+            )
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES DE GESTION DES RÔLES
+    // ================================================================
+
+    /**
+     * Met à jour les rôles d'un membre
+     *
+     * @param memberId ID du membre
+     * @param isAdmin Nouveau statut admin
+     * @param isResponsible Nouveau statut responsable
+     * @return Résultat de la mise à jour
      */
     suspend fun updateMemberRoles(
         memberId: Int,
         isAdmin: Boolean,
         isResponsible: Boolean
-    ): FamilyMemberResult = withContext(Dispatchers.IO) {
+    ): FamilyMemberResult<MembreFamille> = withContext(Dispatchers.IO) {
         try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext FamilyMemberResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
-                )
-
-            // Only admins can change roles
-            if (!currentUser.estAdmin) {
-                return@withContext FamilyMemberResult.Error(
-                    "Seuls les administrateurs peuvent modifier les rôles",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
-                )
-            }
-
-            val existingMember = familyMemberRepository.findById(memberId)
+            // Vérifier que le membre existe
+            val member = familyMemberRepository.findById(memberId)
                 ?: return@withContext FamilyMemberResult.Error(
                     "Membre non trouvé",
-                    FamilyMemberErrorCode.NOT_FOUND
+                    FamilyMemberErrorCode.MEMBER_NOT_FOUND
                 )
 
-            // Check if removing admin role would leave no admins
-            if (existingMember.estAdmin && !isAdmin) {
-                val adminCount = familyMemberRepository.countAdminsByFamilyId(currentUser.familleId)
+            // Si on retire les droits admin, vérifier qu'il ne soit pas le dernier admin
+            if (!isAdmin && member.estAdmin) {
+                val adminCount = familyMemberRepository.countAdminsByFamilyId(member.familleId)
                 if (adminCount <= 1) {
                     return@withContext FamilyMemberResult.Error(
-                        "Il doit y avoir au moins un administrateur dans la famille",
-                        FamilyMemberErrorCode.LAST_ADMIN
+                        "Impossible de retirer les droits au dernier administrateur",
+                        FamilyMemberErrorCode.CANNOT_DELETE_LAST_ADMIN
                     )
                 }
             }
 
-            // Check age restrictions for roles
-            val age = calculateAge(existingMember.dateNaissanceMembre)
-            if (age < 18 && (isAdmin || isResponsible)) {
-                return@withContext FamilyMemberResult.Error(
-                    "Les mineurs ne peuvent pas avoir de rôles administratifs",
-                    FamilyMemberErrorCode.AGE_RESTRICTION
-                )
-            }
+            // Mettre à jour les rôles
+            familyMemberRepository.updateRoles(memberId, isAdmin, isResponsible)
 
-            val updatedMember = existingMember.copy(
-                estAdmin = isAdmin,
-                estResponsable = isResponsible
-            )
-
-            familyMemberRepository.update(updatedMember)
-
-            return@withContext FamilyMemberResult.Success(updatedMember)
+            // Récupérer le membre mis à jour
+            val updatedMember = familyMemberRepository.findById(memberId)!!
+            return@withContext FamilyMemberResult.Success(updatedMember.toModel())
 
         } catch (e: Exception) {
             return@withContext FamilyMemberResult.Error(
@@ -351,163 +333,151 @@ class FamilyMemberController(
     }
 
     /**
-     * Delete a family member
-     * Only admins can delete members, with restrictions
+     * Promeut un membre au rang d'administrateur
+     *
+     * @param memberId ID du membre
+     * @return Résultat de la promotion
      */
-    suspend fun deleteFamilyMember(memberId: Int): FamilyMemberResult = withContext(Dispatchers.IO) {
+    suspend fun promoteToAdmin(memberId: Int): FamilyMemberResult<MembreFamille> = withContext(Dispatchers.IO) {
         try {
-            val currentUser = authController.getCurrentUser()
+            familyMemberRepository.promoteToAdmin(memberId)
+            val updatedMember = familyMemberRepository.findById(memberId)
                 ?: return@withContext FamilyMemberResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
+                    "Membre non trouvé après promotion",
+                    FamilyMemberErrorCode.MEMBER_NOT_FOUND
                 )
 
-            // Only admins can delete members
-            if (!currentUser.estAdmin) {
-                return@withContext FamilyMemberResult.Error(
-                    "Seuls les administrateurs peuvent supprimer des membres",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
-                )
-            }
+            return@withContext FamilyMemberResult.Success(updatedMember.toModel())
 
-            // Cannot delete self
-            if (memberId == currentUser.membreFamilleId) {
-                return@withContext FamilyMemberResult.Error(
-                    "Vous ne pouvez pas supprimer votre propre compte",
-                    FamilyMemberErrorCode.CANNOT_DELETE_SELF
-                )
-            }
+        } catch (e: Exception) {
+            return@withContext FamilyMemberResult.Error(
+                "Erreur lors de la promotion: ${e.message}",
+                FamilyMemberErrorCode.INTERNAL_ERROR
+            )
+        }
+    }
 
-            val memberToDelete = familyMemberRepository.findById(memberId)
+    // ================================================================
+    // MÉTHODES DE SUPPRESSION
+    // ================================================================
+
+    /**
+     * Supprime un membre de famille
+     *
+     * @param memberId ID du membre à supprimer
+     * @return Résultat de la suppression
+     */
+    suspend fun deleteFamilyMember(memberId: Int): FamilyMemberResult<Unit> = withContext(Dispatchers.IO) {
+        try {
+            // Vérifier que le membre existe
+            val member = familyMemberRepository.findById(memberId)
                 ?: return@withContext FamilyMemberResult.Error(
                     "Membre non trouvé",
-                    FamilyMemberErrorCode.NOT_FOUND
+                    FamilyMemberErrorCode.MEMBER_NOT_FOUND
                 )
 
-            // Check if deleting admin would leave no admins
-            if (memberToDelete.estAdmin) {
-                val adminCount = familyMemberRepository.countAdminsByFamilyId(currentUser.familleId)
+            // Vérifier qu'on ne supprime pas le dernier admin
+            if (member.estAdmin) {
+                val adminCount = familyMemberRepository.countAdminsByFamilyId(member.familleId)
                 if (adminCount <= 1) {
                     return@withContext FamilyMemberResult.Error(
-                        "Il doit y avoir au moins un administrateur dans la famille",
-                        FamilyMemberErrorCode.LAST_ADMIN
+                        "Impossible de supprimer le dernier administrateur",
+                        FamilyMemberErrorCode.CANNOT_DELETE_LAST_ADMIN
                     )
                 }
             }
 
-            // Note: The database should handle cascade deletes for related data
-            // (folders, files, permissions) as defined in the SQL schema
-            familyMemberRepository.delete(memberId)
-
-            return@withContext FamilyMemberResult.Success(memberToDelete)
-
-        } catch (e: Exception) {
-            return@withContext FamilyMemberResult.Error(
-                "Erreur lors de la suppression du membre: ${e.message}",
-                FamilyMemberErrorCode.INTERNAL_ERROR
-            )
-        }
-    }
-
-    /**
-     * Get member statistics and activity summary
-     */
-    suspend fun getMemberStatistics(memberId: Int): FamilyMemberResult = withContext(Dispatchers.IO) {
-        try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext FamilyMemberResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
-                )
-
-            val member = familyMemberRepository.findById(memberId)
-                ?: return@withContext FamilyMemberResult.Error(
-                    "Membre non trouvé",
-                    FamilyMemberErrorCode.NOT_FOUND
-                )
-
-            // Check viewing permissions
-            if (!canViewMember(currentUser, member)) {
+            // Supprimer
+            val deleted = familyMemberRepository.delete(memberId)
+            if (deleted == 0) {
                 return@withContext FamilyMemberResult.Error(
-                    "Accès refusé à ce membre",
-                    FamilyMemberErrorCode.PERMISSION_DENIED
+                    "Aucun membre supprimé",
+                    FamilyMemberErrorCode.INTERNAL_ERROR
                 )
             }
 
-            val statistics = MemberStatistics(
-                member = member,
-                folderCount = folderRepository.countByMemberId(memberId),
-                fileCount = folderRepository.countFilesByMemberId(memberId),
-                totalFileSize = folderRepository.getTotalFileSizeByMemberId(memberId),
-                age = calculateAge(member.dateNaissanceMembre)
-            )
-
-            return@withContext FamilyMemberResult.Success(statistics)
+            return@withContext FamilyMemberResult.Success(Unit)
 
         } catch (e: Exception) {
             return@withContext FamilyMemberResult.Error(
-                "Erreur lors de la récupération des statistiques: ${e.message}",
+                "Erreur lors de la suppression: ${e.message}",
                 FamilyMemberErrorCode.INTERNAL_ERROR
             )
         }
     }
 
-    // Private helper methods
+    // ================================================================
+    // MÉTHODES DE STATISTIQUES
+    // ================================================================
 
-    private fun canViewMember(currentUser: FamilyMember, targetMember: FamilyMember): Boolean {
-        return currentUser.familleId == targetMember.familleId &&
-                (currentUser.estAdmin || currentUser.estResponsible ||
-                        currentUser.membreFamilleId == targetMember.membreFamilleId)
-    }
+    /**
+     * Obtient les statistiques des membres d'une famille
+     *
+     * @param familyId ID de la famille
+     * @return Résultat avec les statistiques
+     */
+    suspend fun getFamilyMemberStatistics(familyId: Int): FamilyMemberResult<FamilyMemberStatistics> = withContext(Dispatchers.IO) {
+        try {
+            val totalCount = familyMemberRepository.countByFamilyId(familyId)
+            val adminCount = familyMemberRepository.countAdminsByFamilyId(familyId)
+            val responsibleCount = familyMemberRepository.countResponsiblesByFamilyId(familyId)
+            val childrenCount = familyMemberRepository.countChildrenByFamilyId(familyId)
+            val lastActivity = familyMemberRepository.getLastActivityByFamilyId(familyId)
 
-    private fun canEditMember(currentUser: FamilyMember, targetMember: FamilyMember): Boolean {
-        return currentUser.familleId == targetMember.familleId &&
-                (currentUser.estAdmin || currentUser.membreFamilleId == targetMember.membreFamilleId)
-    }
+            val stats = FamilyMemberStatistics(
+                familyId = familyId,
+                totalMembers = totalCount,
+                adminCount = adminCount,
+                responsibleCount = responsibleCount,
+                childrenCount = childrenCount,
+                lastActivity = lastActivity
+            )
 
-    private fun canManageFamilyMembers(user: FamilyMember): Boolean {
-        return user.estAdmin || user.estResponsable
-    }
+            return@withContext FamilyMemberResult.Success(stats)
 
-    private fun validateMemberInput(
-        firstName: String,
-        email: String,
-        password: String,
-        dateOfBirth: LocalDate,
-        gender: String
-    ): FamilyMemberResult.Error? {
-        if (firstName.isBlank()) {
-            return FamilyMemberResult.Error("Le prénom est requis", FamilyMemberErrorCode.INVALID_INPUT)
-        }
-
-        if (!isValidEmail(email)) {
-            return FamilyMemberResult.Error("Format d'email invalide", FamilyMemberErrorCode.INVALID_INPUT)
-        }
-
-        if (!isValidPassword(password)) {
-            return FamilyMemberResult.Error(
-                "Le mot de passe doit contenir au moins 8 caractères, une lettre et un chiffre",
-                FamilyMemberErrorCode.INVALID_INPUT
+        } catch (e: Exception) {
+            return@withContext FamilyMemberResult.Error(
+                "Erreur lors du calcul des statistiques: ${e.message}",
+                FamilyMemberErrorCode.INTERNAL_ERROR
             )
         }
+    }
 
-        if (dateOfBirth.isAfter(LocalDate.now())) {
-            return FamilyMemberResult.Error(
-                "La date de naissance ne peut pas être dans le futur",
-                FamilyMemberErrorCode.INVALID_INPUT
-            )
+    // ================================================================
+    // MÉTHODES PRIVÉES DE VALIDATION
+    // ================================================================
+
+    private fun validateMemberData(memberData: CreateMemberRequest): String? {
+        return when {
+            memberData.firstName.isBlank() -> "Le prénom ne peut pas être vide"
+            memberData.firstName.length < 2 -> "Le prénom doit contenir au moins 2 caractères"
+            memberData.firstName.length > 50 -> "Le prénom ne peut pas dépasser 50 caractères"
+            !isValidEmail(memberData.email) -> "Format d'email invalide"
+            memberData.birthDate == null -> "La date de naissance est requise"
+            memberData.birthDate.isAfter(LocalDate.now()) ->
+                "La date de naissance ne peut pas être dans le futur"
+            else -> null
         }
+    }
 
-        if (!isValidGender(gender)) {
-            return FamilyMemberResult.Error("Genre invalide", FamilyMemberErrorCode.INVALID_INPUT)
+    private fun validateUpdateData(updateData: UpdateMemberRequest): String? {
+        return when {
+            updateData.firstName != null && updateData.firstName.isBlank() ->
+                "Le prénom ne peut pas être vide"
+            updateData.firstName != null && updateData.firstName.length < 2 ->
+                "Le prénom doit contenir au moins 2 caractères"
+            updateData.firstName != null && updateData.firstName.length > 50 ->
+                "Le prénom ne peut pas dépasser 50 caractères"
+            updateData.email != null && !isValidEmail(updateData.email) ->
+                "Format d'email invalide"
+            updateData.birthDate != null && updateData.birthDate.isAfter(LocalDate.now()) ->
+                "La date de naissance ne peut pas être dans le futur"
+            else -> null
         }
-
-        return null
     }
 
     private fun isValidEmail(email: String): Boolean {
-        val emailRegex = "^[A-Za-z0-9+_.-]+@([A-Za-z0-9.-]+\\.[A-Za-z]{2,})$".toRegex()
-        return emailRegex.matches(email)
+        return email.matches(Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"))
     }
 
     private fun isValidPassword(password: String): Boolean {
@@ -515,40 +485,44 @@ class FamilyMemberController(
                 password.any { it.isDigit() } &&
                 password.any { it.isLetter() }
     }
-
-    private fun isValidGender(gender: String): Boolean {
-        return gender in listOf("M", "F", "Autre")
-    }
-
-    private fun calculateAge(dateOfBirth: LocalDate): Int {
-        return LocalDate.now().year - dateOfBirth.year -
-                if (LocalDate.now().dayOfYear < dateOfBirth.dayOfYear) 1 else 0
-    }
-
-    /**
-     * Create default personal folders for a new member
-     * This should integrate with the CategoryController for default templates
-     */
-    private suspend fun createDefaultPersonalFolders(memberId: Int) {
-        // This would typically create folders based on default templates
-        // Implementation would depend on the specific requirements
-        // For now, this is a placeholder for the functionality
-        try {
-            // TODO: Implement default folder creation based on category templates
-            println("Creating default folders for member $memberId")
-        } catch (e: Exception) {
-            println("Warning: Could not create default folders for member $memberId: ${e.message}")
-        }
-    }
 }
 
+// ================================================================
+// DATA CLASSES POUR LES REQUÊTES ET RÉSULTATS
+// ================================================================
+
 /**
- * Data class for member statistics
+ * Données pour créer un nouveau membre
  */
-data class MemberStatistics(
-    val member: MembreFamille,
-    val folderCount: Int,
-    val fileCount: Int,
-    val totalFileSize: Long,
-    val age: Int
+data class CreateMemberRequest(
+    val firstName: String,
+    val email: String,
+    val password: String,
+    val birthDate: LocalDate?,
+    val gender: String?,
+    val isAdmin: Boolean = false,
+    val isResponsible: Boolean = false,
+    val familyId: Int
+)
+
+/**
+ * Données pour mettre à jour un membre
+ */
+data class UpdateMemberRequest(
+    val firstName: String? = null,
+    val email: String? = null,
+    val birthDate: LocalDate? = null,
+    val gender: String? = null
+)
+
+/**
+ * Statistiques des membres d'une famille
+ */
+data class FamilyMemberStatistics(
+    val familyId: Int,
+    val totalMembers: Int,
+    val adminCount: Int,
+    val responsibleCount: Int,
+    val childrenCount: Int,
+    val lastActivity: LocalDateTime?
 )

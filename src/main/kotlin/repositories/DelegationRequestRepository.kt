@@ -1,99 +1,213 @@
 package repositories
 
-import ktorm.*
-import org.ktorm.dsl.*
+import org.ktorm.entity.sequenceOf
+import org.ktorm.entity.find
 import org.ktorm.entity.filter
-import org.ktorm.entity.sortedByDescending
 import org.ktorm.entity.toList
+import org.ktorm.dsl.*
 import org.ktorm.schema.Column
+import ktorm.*
 import java.time.LocalDateTime
 
 /**
- * Repository pour la gestion des demandes de délégation dans Arka
+ * Repository pour la gestion des demandes de délégation
+ *
+ * Responsabilités:
+ * - CRUD des demandes de délégation
+ * - Gestion du workflow des demandes (création, approbation, rejet, révocation)
+ * - Recherche et filtrage des demandes
+ * - Statistiques et audit des demandes
+ * - Nettoyage automatique des demandes expirées
+ *
+ * Utilisé par: DelegationController, PermissionController, AdminController
  */
-class DelegationRequestRepository : BaseRepository<DemandeDelegationEntity, org.ktorm.schema.Table<DemandeDelegationEntity>>() {
+class DelegationRequestRepository : BaseRepository<DemandeDelegationEntity, DemandesDelegation>() {
 
     override val table = DemandesDelegation
 
-    override fun getIdColumn(entity: DemandeDelegationEntity): Column<Int> = table.demandeId
+    /**
+     * Obtient la clé primaire d'une demande de délégation
+     */
+    override fun DemandeDelegationEntity.getPrimaryKey(): Int = this.demandeId
+    override fun getPrimaryKeyColumn(): Column<Int> = DemandesDelegation.demandeId
 
     /**
-     * Trouve toutes les demandes en attente
-     * @return Liste des demandes en attente
+     * Met à jour une demande de délégation
      */
-    fun findPendingRequests(): List<DemandeDelegationEntity> {
-        return try {
-            entities.filter { table.statut eq StatutDemande.EN_ATTENTE.name }
-                .sortedByDescending { table.dateDemande }
-                .toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des demandes en attente: ${e.message}")
-            emptyList()
+    override fun update(entity: DemandeDelegationEntity): Int {
+        return ArkaDatabase.instance.update(DemandesDelegation) {
+            set(it.statut, entity.statut)
+            set(it.dateValidation, entity.dateValidation)
+            set(it.valideeParId, entity.valideeParId)
+            set(it.commentaireAdmin, entity.commentaireAdmin)
+            where { it.demandeId eq entity.demandeId }
         }
     }
 
+    // ================================================================
+    // MÉTHODES DE RECHERCHE PAR STATUT
+    // ================================================================
+
     /**
-     * Trouve les demandes d'un propriétaire (demandes reçues)
-     * @param proprietaireId L'ID du propriétaire
-     * @param statut Optionnel: filtrer par statut
-     * @return Liste des demandes
+     * Récupère toutes les demandes en attente
+     *
+     * @return Liste des demandes en attente triées par date
      */
-    fun findByOwner(proprietaireId: Int, statut: StatutDemande? = null): List<DemandeDelegationEntity> {
-        return try {
-            var query = entities.filter { table.proprietaireId eq proprietaireId }
-
-            statut?.let { query = query.filter { table.statut eq it.name } }
-
-            query.sortedByDescending { table.dateDemande }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des demandes du propriétaire $proprietaireId: ${e.message}")
-            emptyList()
-        }
+    fun getDemandesEnAttente(): List<DemandeDelegationEntity> {
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .filter { it.statut eq StatutDemande.EN_ATTENTE.name }
+            .toList()
+            .sortedByDescending { it.dateDemande ?: LocalDateTime.MIN }
     }
 
     /**
-     * Trouve les demandes d'un bénéficiaire (demandes faites)
-     * @param beneficiaireId L'ID du bénéficiaire
-     * @param statut Optionnel: filtrer par statut
-     * @return Liste des demandes
+     * Récupère les demandes par statut
+     *
+     * @param statut Statut des demandes
+     * @return Liste des demandes du statut spécifié
      */
-    fun findByBeneficiary(beneficiaireId: Int, statut: StatutDemande? = null): List<DemandeDelegationEntity> {
-        return try {
-            var query = entities.filter { table.beneficiaireId eq beneficiaireId }
-
-            statut?.let { query = query.filter { table.statut eq it.name } }
-
-            query.sortedByDescending { table.dateDemande }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des demandes du bénéficiaire $beneficiaireId: ${e.message}")
-            emptyList()
-        }
+    fun getDemandesByStatut(statut: StatutDemande): List<DemandeDelegationEntity> {
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .filter { it.statut eq statut.name }
+            .toList()
+            .sortedByDescending { it.dateDemande ?: LocalDateTime.MIN }
     }
 
     /**
-     * Trouve les demandes pour une cible spécifique
-     * @param portee La portée (DOSSIER, FICHIER, etc.)
-     * @param cibleId L'ID de la cible
+     * Compte les demandes par statut
+     *
+     * @param statut Statut à compter
+     * @return Nombre de demandes
+     */
+    fun countByStatut(statut: StatutDemande): Int {
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .filter { it.statut eq statut.name }
+            .toList()
+            .size
+    }
+
+    // ================================================================
+    // MÉTHODES DE RECHERCHE PAR UTILISATEUR
+    // ================================================================
+
+    /**
+     * Récupère les demandes d'un propriétaire (demandes reçues)
+     *
+     * @param proprietaireId ID du propriétaire
+     * @param statut Statut optionnel pour filtrer
+     * @return Liste des demandes reçues
+     */
+    fun getDemandesByProprietaire(proprietaireId: Int, statut: StatutDemande? = null): List<DemandeDelegationEntity> {
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .filter { demande ->
+                val baseCondition = demande.proprietaireId eq proprietaireId
+                if (statut != null) {
+                    baseCondition and (demande.statut eq statut.name)
+                } else {
+                    baseCondition
+                }
+            }
+            .toList()
+            .sortedByDescending { it.dateDemande ?: LocalDateTime.MIN }
+    }
+
+    /**
+     * Récupère les demandes d'un bénéficiaire (demandes faites)
+     *
+     * @param beneficiaireId ID du bénéficiaire
+     * @param statut Statut optionnel pour filtrer
+     * @return Liste des demandes faites
+     */
+    fun getDemandesByBeneficiaire(beneficiaireId: Int, statut: StatutDemande? = null): List<DemandeDelegationEntity> {
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .filter { demande ->
+                val baseCondition = demande.beneficiaireId eq beneficiaireId
+                if (statut != null) {
+                    baseCondition and (demande.statut eq statut.name)
+                } else {
+                    baseCondition
+                }
+            }
+            .toList()
+            .sortedByDescending { it.dateDemande ?: LocalDateTime.MIN }
+    }
+
+    /**
+     * Compte les demandes en attente d'un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
+     * @return Nombre de demandes en attente
+     */
+    fun countDemandesEnAttenteByProprietaire(proprietaireId: Int): Int {
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .filter {
+                (it.proprietaireId eq proprietaireId) and (it.statut eq StatutDemande.EN_ATTENTE.name)
+            }
+            .toList()
+            .size
+    }
+
+    /**
+     * Compte les demandes d'un bénéficiaire par statut
+     *
+     * @param beneficiaireId ID du bénéficiaire
+     * @param statut Statut à compter
+     * @return Nombre de demandes
+     */
+    fun countDemandesByBeneficiaireAndStatut(beneficiaireId: Int, statut: StatutDemande): Int {
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .filter {
+                (it.beneficiaireId eq beneficiaireId) and (it.statut eq statut.name)
+            }
+            .toList()
+            .size
+    }
+
+    // ================================================================
+    // MÉTHODES DE RECHERCHE PAR CIBLE
+    // ================================================================
+
+    /**
+     * Récupère les demandes pour une cible spécifique
+     *
+     * @param portee Portée de la permission
+     * @param cibleId ID de la cible
      * @return Liste des demandes pour cette cible
      */
-    fun findByTarget(portee: PorteePermission, cibleId: Int): List<DemandeDelegationEntity> {
-        return try {
-            entities.filter {
-                (table.portee eq portee.name) and (table.cibleId eq cibleId)
-            }.sortedByDescending { table.dateDemande }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des demandes pour la cible $cibleId: ${e.message}")
-            emptyList()
-        }
+    fun getDemandesByTarget(portee: PorteePermission, cibleId: Int): List<DemandeDelegationEntity> {
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .filter {
+                (it.portee eq portee.name) and (it.cibleId eq cibleId)
+            }
+            .toList()
+            .sortedByDescending { it.dateDemande ?: LocalDateTime.MIN }
     }
 
     /**
-     * Vérifie si une demande similaire existe déjà
-     * @param proprietaireId L'ID du propriétaire
-     * @param beneficiaireId L'ID du bénéficiaire
-     * @param portee La portée
-     * @param cibleId L'ID de la cible
-     * @param typePermission Le type de permission
+     * Récupère les demandes par portée
+     *
+     * @param portee Portée des permissions
+     * @return Liste des demandes de cette portée
+     */
+    fun getDemandesByPortee(portee: PorteePermission): List<DemandeDelegationEntity> {
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .filter { it.portee eq portee.name }
+            .toList()
+            .sortedByDescending { it.dateDemande ?: LocalDateTime.MIN }
+    }
+
+    // ================================================================
+    // MÉTHODES DE VALIDATION ET VÉRIFICATION
+    // ================================================================
+
+    /**
+     * Vérifie si une demande similaire existe déjà en attente
+     *
+     * @param proprietaireId ID du propriétaire
+     * @param beneficiaireId ID du bénéficiaire
+     * @param portee Portée de la permission
+     * @param cibleId ID de la cible (optionnel)
+     * @param typePermission Type de permission
      * @return La demande existante ou null
      */
     fun findExistingRequest(
@@ -103,336 +217,397 @@ class DelegationRequestRepository : BaseRepository<DemandeDelegationEntity, org.
         cibleId: Int?,
         typePermission: TypePermission
     ): DemandeDelegationEntity? {
-        return try {
-            entities.find {
-                (table.proprietaireId eq proprietaireId) and
-                        (table.beneficiaireId eq beneficiaireId) and
-                        (table.portee eq portee.name) and
-                        (table.typePermission eq typePermission.name) and
-                        (if (cibleId != null) table.cibleId eq cibleId else table.cibleId.isNull()) and
-                        (table.statut eq StatutDemande.EN_ATTENTE.name)
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .find { demande ->
+                val baseCondition = (demande.proprietaireId eq proprietaireId) and
+                        (demande.beneficiaireId eq beneficiaireId) and
+                        (demande.portee eq portee.name) and
+                        (demande.typePermission eq typePermission.name) and
+                        (demande.statut eq StatutDemande.EN_ATTENTE.name)
+
+                if (cibleId != null) {
+                    baseCondition and (demande.cibleId eq cibleId)
+                } else {
+                    baseCondition and demande.cibleId.isNull()
+                }
             }
+    }
+
+    /**
+     * Vérifie si une demande peut être approuvée
+     *
+     * @param demandeId ID de la demande
+     * @return true si la demande peut être approuvée
+     */
+    fun canBeApproved(demandeId: Int): Boolean {
+        val demande = findById(demandeId) ?: return false
+        return demande.statut == StatutDemande.EN_ATTENTE.name
+    }
+
+    /**
+     * Vérifie si une demande peut être révoquée
+     *
+     * @param demandeId ID de la demande
+     * @return true si la demande peut être révoquée
+     */
+    fun canBeRevoked(demandeId: Int): Boolean {
+        val demande = findById(demandeId) ?: return false
+        return demande.statut == StatutDemande.APPROUVEE.name
+    }
+
+    // ================================================================
+    // MÉTHODES DE GESTION DU WORKFLOW
+    // ================================================================
+
+    /**
+     * Crée une nouvelle demande de délégation avec validation
+     *
+     * @param proprietaireId ID du propriétaire
+     * @param beneficiaireId ID du bénéficiaire
+     * @param portee Portée de la permission
+     * @param cibleId ID de la cible (optionnel selon la portée)
+     * @param typePermission Type de permission demandé
+     * @param raisonDemande Raison de la demande
+     * @param dateExpiration Date d'expiration (optionnelle)
+     * @return La demande créée ou null en cas d'erreur
+     */
+    fun createDemandeDelegation(
+        proprietaireId: Int,
+        beneficiaireId: Int,
+        portee: PorteePermission,
+        cibleId: Int?,
+        typePermission: TypePermission,
+        raisonDemande: String?,
+        dateExpiration: LocalDateTime?
+    ): DemandeDelegationEntity? {
+        // Validation de base
+        if (proprietaireId == beneficiaireId) {
+            println("Le propriétaire et le bénéficiaire ne peuvent pas être la même personne")
+            return null
+        }
+
+        if (dateExpiration != null && dateExpiration.isBefore(LocalDateTime.now())) {
+            println("La date d'expiration ne peut pas être dans le passé")
+            return null
+        }
+
+        // Vérifier qu'il n'y a pas déjà une demande similaire en attente
+        if (findExistingRequest(proprietaireId, beneficiaireId, portee, cibleId, typePermission) != null) {
+            println("Une demande similaire est déjà en attente")
+            return null
+        }
+
+        return try {
+            val demande = DemandeDelegationEntity {
+                this.proprietaireId = proprietaireId
+                this.beneficiaireId = beneficiaireId
+                this.portee = portee.name
+                this.cibleId = cibleId
+                this.typePermission = typePermission.name
+                this.dateDemande = LocalDateTime.now()
+                this.statut = StatutDemande.EN_ATTENTE.name
+                this.raisonDemande = raisonDemande
+                this.dateExpiration = dateExpiration
+            }
+
+            create(demande)
         } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche de demande existante: ${e.message}")
+            println("Erreur lors de la création de la demande: ${e.message}")
             null
         }
     }
 
     /**
-     * Crée une nouvelle demande de délégation
-     * @param requestData Les données de la demande
-     * @return Le résultat de l'opération
-     */
-    fun createDelegationRequest(requestData: CreateDelegationRequestData): RepositoryResult<DemandeDelegation> {
-        // Validation
-        val validationErrors = validateDelegationRequest(requestData)
-        if (validationErrors.isNotEmpty()) {
-            return RepositoryResult.ValidationError(validationErrors)
-        }
-
-        // Vérifier qu'il n'y a pas déjà une demande similaire en attente
-        if (findExistingRequest(
-                requestData.proprietaireId,
-                requestData.beneficiaireId,
-                requestData.portee,
-                requestData.cibleId,
-                requestData.typePermission
-            ) != null
-        ) {
-            return RepositoryResult.Error("Une demande similaire est déjà en attente")
-        }
-
-        return try {
-            val demande = DemandeDelegationEntity {
-                this.proprietaireId = requestData.proprietaireId
-                this.beneficiaireId = requestData.beneficiaireId
-                this.portee = requestData.portee.name
-                this.cibleId = requestData.cibleId
-                this.typePermission = requestData.typePermission.name
-                this.dateDemande = LocalDateTime.now()
-                this.statut = StatutDemande.EN_ATTENTE.name
-                this.raisonDemande = requestData.raisonDemande
-                this.dateExpiration = requestData.dateExpiration
-            }
-
-            if (save(demande)) {
-                RepositoryResult.Success(demande.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la création de la demande")
-            }
-        } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la création: ${e.message}")
-        }
-    }
-
-    /**
      * Approuve une demande de délégation
-     * @param demandeId L'ID de la demande
-     * @param validateurId L'ID de celui qui valide
+     *
+     * @param demandeId ID de la demande
+     * @param validateurId ID de celui qui valide
      * @param commentaire Commentaire de validation (optionnel)
-     * @return Le résultat de l'opération
+     * @return true si l'approbation a réussi
      */
-    fun approveDelegationRequest(
-        demandeId: Int,
-        validateurId: Int,
-        commentaire: String? = null
-    ): RepositoryResult<DemandeDelegation> {
+    fun approuverDemande(demandeId: Int, validateurId: Int, commentaire: String? = null): Boolean {
+        val demande = findById(demandeId) ?: return false
+
+        if (demande.statut != StatutDemande.EN_ATTENTE.name) {
+            println("Cette demande a déjà été traitée")
+            return false
+        }
+
         return try {
-            val demande = findById(demandeId)
-            if (demande == null) {
-                return RepositoryResult.Error("Demande non trouvée")
+            val rowsAffected = ArkaDatabase.instance.update(DemandesDelegation) {
+                set(it.statut, StatutDemande.APPROUVEE.name)
+                set(it.dateValidation, LocalDateTime.now())
+                set(it.valideeParId, validateurId)
+                set(it.commentaireAdmin, commentaire)
+                where { it.demandeId eq demandeId }
             }
-
-            if (demande.statut != StatutDemande.EN_ATTENTE.name) {
-                return RepositoryResult.Error("Cette demande a déjà été traitée")
-            }
-
-            demande.statut = StatutDemande.APPROUVEE.name
-            demande.dateValidation = LocalDateTime.now()
-            demande.valideeParId = validateurId
-            demande.commentaireAdmin = commentaire
-
-            if (update(demande)) {
-                RepositoryResult.Success(demande.toModel())
-            } else {
-                RepositoryResult.Error("Échec de l'approbation")
-            }
+            rowsAffected > 0
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de l'approbation: ${e.message}")
+            println("Erreur lors de l'approbation de la demande $demandeId: ${e.message}")
+            false
         }
     }
 
     /**
      * Rejette une demande de délégation
-     * @param demandeId L'ID de la demande
-     * @param validateurId L'ID de celui qui rejette
-     * @param raisonRejet La raison du rejet
-     * @return Le résultat de l'opération
+     *
+     * @param demandeId ID de la demande
+     * @param validateurId ID de celui qui rejette
+     * @param raisonRejet Raison du rejet
+     * @return true si le rejet a réussi
      */
-    fun rejectDelegationRequest(
-        demandeId: Int,
-        validateurId: Int,
-        raisonRejet: String
-    ): RepositoryResult<DemandeDelegation> {
+    fun rejeterDemande(demandeId: Int, validateurId: Int, raisonRejet: String): Boolean {
+        val demande = findById(demandeId) ?: return false
+
+        if (demande.statut != StatutDemande.EN_ATTENTE.name) {
+            println("Cette demande a déjà été traitée")
+            return false
+        }
+
         return try {
-            val demande = findById(demandeId)
-            if (demande == null) {
-                return RepositoryResult.Error("Demande non trouvée")
+            val rowsAffected = ArkaDatabase.instance.update(DemandesDelegation) {
+                set(it.statut, StatutDemande.REJETEE.name)
+                set(it.dateValidation, LocalDateTime.now())
+                set(it.valideeParId, validateurId)
+                set(it.commentaireAdmin, raisonRejet)
+                where { it.demandeId eq demandeId }
             }
-
-            if (demande.statut != StatutDemande.EN_ATTENTE.name) {
-                return RepositoryResult.Error("Cette demande a déjà été traitée")
-            }
-
-            demande.statut = StatutDemande.REJETEE.name
-            demande.dateValidation = LocalDateTime.now()
-            demande.valideeParId = validateurId
-            demande.commentaireAdmin = raisonRejet
-
-            if (update(demande)) {
-                RepositoryResult.Success(demande.toModel())
-            } else {
-                RepositoryResult.Error("Échec du rejet")
-            }
+            rowsAffected > 0
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors du rejet: ${e.message}")
+            println("Erreur lors du rejet de la demande $demandeId: ${e.message}")
+            false
         }
     }
 
     /**
      * Révoque une demande approuvée
-     * @param demandeId L'ID de la demande
-     * @param revoqueuId L'ID de celui qui révoque
-     * @param raisonRevocation La raison de la révocation
-     * @return Le résultat de l'opération
+     *
+     * @param demandeId ID de la demande
+     * @param revoqueurId ID de celui qui révoque
+     * @param raisonRevocation Raison de la révocation
+     * @return true si la révocation a réussi
      */
-    fun revokeDelegationRequest(
-        demandeId: Int,
-        revoqueuId: Int,
-        raisonRevocation: String
-    ): RepositoryResult<DemandeDelegation> {
+    fun revoquerDemande(demandeId: Int, revoqueurId: Int, raisonRevocation: String): Boolean {
+        val demande = findById(demandeId) ?: return false
+
+        if (demande.statut != StatutDemande.APPROUVEE.name) {
+            println("Seules les demandes approuvées peuvent être révoquées")
+            return false
+        }
+
         return try {
-            val demande = findById(demandeId)
-            if (demande == null) {
-                return RepositoryResult.Error("Demande non trouvée")
+            val rowsAffected = ArkaDatabase.instance.update(DemandesDelegation) {
+                set(it.statut, StatutDemande.REVOQUEE.name)
+                set(it.dateValidation, LocalDateTime.now())
+                set(it.valideeParId, revoqueurId)
+                set(it.commentaireAdmin, raisonRevocation)
+                where { it.demandeId eq demandeId }
             }
-
-            if (demande.statut != StatutDemande.APPROUVEE.name) {
-                return RepositoryResult.Error("Seules les demandes approuvées peuvent être révoquées")
-            }
-
-            demande.statut = StatutDemande.REVOQUEE.name
-            demande.dateValidation = LocalDateTime.now()
-            demande.valideeParId = revoqueuId
-            demande.commentaireAdmin = raisonRevocation
-
-            if (update(demande)) {
-                RepositoryResult.Success(demande.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la révocation")
-            }
+            rowsAffected > 0
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la révocation: ${e.message}")
+            println("Erreur lors de la révocation de la demande $demandeId: ${e.message}")
+            false
         }
     }
 
+    // ================================================================
+    // MÉTHODES DE RECHERCHE AVANCÉE
+    // ================================================================
+
     /**
-     * Obtient les statistiques des demandes
-     * @param proprietaireId Optionnel: limiter à un propriétaire
-     * @return Les statistiques des demandes
+     * Recherche des demandes par période
+     *
+     * @param since Date de début
+     * @param until Date de fin (optionnelle)
+     * @param statut Statut optionnel pour filtrer
+     * @return Liste des demandes de la période
      */
-    fun getDelegationStats(proprietaireId: Int? = null): DelegationStats {
-        return try {
-            val baseQuery = if (proprietaireId != null) {
-                database.from(DemandesDelegation).where { DemandesDelegation.proprietaireId eq proprietaireId }
-            } else {
-                database.from(DemandesDelegation)
+    fun getDemandesParPeriode(
+        since: LocalDateTime,
+        until: LocalDateTime? = null,
+        statut: StatutDemande? = null
+    ): List<DemandeDelegationEntity> {
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .filter { demande ->
+                var condition = demande.dateDemande greaterEq since
+
+                until?.let {
+                    condition = condition and (demande.dateDemande lessEq it)
+                }
+                statut?.let {
+                    condition = condition and (demande.statut eq it.name)
+                }
+
+                condition
             }
-
-            val enAttente = baseQuery.select(count())
-                .where { DemandesDelegation.statut eq StatutDemande.EN_ATTENTE.name }
-                .map { it.getInt(1) }.first()
-
-            val approuvees = baseQuery.select(count())
-                .where { DemandesDelegation.statut eq StatutDemande.APPROUVEE.name }
-                .map { it.getInt(1) }.first()
-
-            val rejetees = baseQuery.select(count())
-                .where { DemandesDelegation.statut eq StatutDemande.REJETEE.name }
-                .map { it.getInt(1) }.first()
-
-            val revoquees = baseQuery.select(count())
-                .where { DemandesDelegation.statut eq StatutDemande.REVOQUEE.name }
-                .map { it.getInt(1) }.first()
-
-            DelegationStats(
-                enAttente = enAttente,
-                approuvees = approuvees,
-                rejetees = rejetees,
-                revoquees = revoquees,
-                total = enAttente + approuvees + rejetees + revoquees
-            )
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors du calcul des stats de délégation: ${e.message}")
-            DelegationStats(0, 0, 0, 0, 0)
-        }
+            .toList()
+            .sortedByDescending { it.dateDemande ?: LocalDateTime.MIN }
     }
 
     /**
-     * Trouve les demandes expirées qui n'ont pas été traitées
+     * Récupère les demandes récentes
+     *
+     * @param limit Nombre maximum de demandes
+     * @param statut Statut optionnel pour filtrer
+     * @return Liste des demandes récentes
+     */
+    fun getDemandesRecentes(limit: Int = 10, statut: StatutDemande? = null): List<DemandeDelegationEntity> {
+        val demandes = if (statut != null) {
+            getDemandesByStatut(statut)
+        } else {
+            findAll()
+        }
+
+        return demandes
+            .sortedByDescending { it.dateDemande ?: LocalDateTime.MIN }
+            .take(limit)
+    }
+
+    // ================================================================
+    // MÉTHODES DE GESTION DES EXPIRATIONS
+    // ================================================================
+
+    /**
+     * Récupère les demandes expirées qui n'ont pas été traitées
+     *
      * @return Liste des demandes expirées
      */
-    fun findExpiredRequests(): List<DemandeDelegationEntity> {
-        return try {
-            entities.filter {
-                (table.dateExpiration.isNotNull()) and
-                        (table.dateExpiration less LocalDateTime.now()) and
-                        (table.statut eq StatutDemande.EN_ATTENTE.name)
-            }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des demandes expirées: ${e.message}")
-            emptyList()
-        }
+    fun getDemandesExpirees(): List<DemandeDelegationEntity> {
+        val maintenant = LocalDateTime.now()
+        return ArkaDatabase.instance.sequenceOf(DemandesDelegation)
+            .filter {
+                it.dateExpiration.isNotNull() and
+                        (it.dateExpiration less maintenant) and
+                        (it.statut eq StatutDemande.EN_ATTENTE.name)
+            }
+            .toList()
     }
 
     /**
      * Nettoie automatiquement les demandes expirées
-     * @return Le nombre de demandes nettoyées
+     *
+     * @return Nombre de demandes nettoyées
      */
-    fun cleanExpiredRequests(): Int {
+    fun cleanDemandesExpirees(): Int {
         return try {
-            val expiredRequests = findExpiredRequests()
-            var cleanedCount = 0
-
-            for (request in expiredRequests) {
-                request.statut = StatutDemande.REJETEE.name
-                request.dateValidation = LocalDateTime.now()
-                request.commentaireAdmin = "Demande expirée automatiquement"
-
-                if (update(request)) {
-                    cleanedCount++
+            val maintenant = LocalDateTime.now()
+            ArkaDatabase.instance.update(DemandesDelegation) {
+                set(it.statut, StatutDemande.REJETEE.name)
+                set(it.dateValidation, maintenant)
+                set(it.commentaireAdmin, "Demande expirée automatiquement")
+                where {
+                    it.dateExpiration.isNotNull() and
+                            (it.dateExpiration less maintenant) and
+                            (it.statut eq StatutDemande.EN_ATTENTE.name)
                 }
             }
-
-            cleanedCount
         } catch (e: Exception) {
-            println("⚠️ Erreur lors du nettoyage des demandes expirées: ${e.message}")
+            println("Erreur lors du nettoyage des demandes expirées: ${e.message}")
+            0
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES DE STATISTIQUES
+    // ================================================================
+
+    /**
+     * Obtient les statistiques des demandes
+     *
+     * @param proprietaireId ID du propriétaire (optionnel)
+     * @return Map avec les statistiques
+     */
+    fun getStatistiquesDemandes(proprietaireId: Int? = null): Map<String, Any> {
+        val demandes = if (proprietaireId != null) {
+            getDemandesByProprietaire(proprietaireId)
+        } else {
+            findAll()
+        }
+
+        val enAttente = demandes.count { it.statut == StatutDemande.EN_ATTENTE.name }
+        val approuvees = demandes.count { it.statut == StatutDemande.APPROUVEE.name }
+        val rejetees = demandes.count { it.statut == StatutDemande.REJETEE.name }
+        val revoquees = demandes.count { it.statut == StatutDemande.REVOQUEE.name }
+
+        return mapOf(
+            "total" to demandes.size,
+            "enAttente" to enAttente,
+            "approuvees" to approuvees,
+            "rejetees" to rejetees,
+            "revoquees" to revoquees,
+            "tauxApprobation" to if (demandes.isNotEmpty()) {
+                (approuvees.toDouble() / (approuvees + rejetees) * 100).toInt()
+            } else 0
+        )
+    }
+
+    /**
+     * Obtient les statistiques par type de permission
+     *
+     * @return Map type -> nombre de demandes
+     */
+    fun getStatistiquesParTypePermission(): Map<TypePermission, Int> {
+        val demandes = findAll()
+        return demandes
+            .groupBy { TypePermission.valueOf(it.typePermission) }
+            .mapValues { it.value.size }
+    }
+
+    /**
+     * Obtient les statistiques par portée
+     *
+     * @return Map portée -> nombre de demandes
+     */
+    fun getStatistiquesParPortee(): Map<PorteePermission, Int> {
+        val demandes = findAll()
+        return demandes
+            .groupBy { PorteePermission.valueOf(it.portee) }
+            .mapValues { it.value.size }
+    }
+
+    // ================================================================
+    // MÉTHODES DE SUPPRESSION ET NETTOYAGE
+    // ================================================================
+
+    /**
+     * Supprime toutes les demandes d'un utilisateur
+     * Utilisé lors de la suppression d'un membre
+     *
+     * @param membreId ID du membre
+     * @return Nombre de demandes supprimées
+     */
+    fun deleteAllByMembre(membreId: Int): Int {
+        return try {
+            val asProprietaire = ArkaDatabase.instance.delete(DemandesDelegation) {
+                it.proprietaireId eq membreId
+            }
+            val asBeneficiaire = ArkaDatabase.instance.delete(DemandesDelegation) {
+                it.beneficiaireId eq membreId
+            }
+            asProprietaire + asBeneficiaire
+        } catch (e: Exception) {
+            println("Erreur lors de la suppression des demandes du membre $membreId: ${e.message}")
             0
         }
     }
 
     /**
-     * Valide une demande de délégation
+     * Archive les anciennes demandes traitées
+     *
+     * @param daysThreshold Nombre de jours après traitement
+     * @return Nombre de demandes archivées
      */
-    private fun validateDelegationRequest(requestData: CreateDelegationRequestData): List<String> {
-        val errors = mutableListOf<String>()
-
-        if (requestData.proprietaireId == requestData.beneficiaireId) {
-            errors.add("Le propriétaire et le bénéficiaire ne peuvent pas être la même personne")
-        }
-
-        if (requestData.raisonDemande?.isBlank() == true) {
-            errors.add("La raison de la demande ne peut pas être vide")
-        }
-
-        if (requestData.dateExpiration != null && requestData.dateExpiration.isBefore(LocalDateTime.now())) {
-            errors.add("La date d'expiration ne peut pas être dans le passé")
-        }
-
-        // Validation selon la portée
-        when (requestData.portee) {
-            PorteePermission.DOSSIER, PorteePermission.FICHIER -> {
-                if (requestData.cibleId == null) {
-                    errors.add("L'ID de la cible est requis pour cette portée")
-                }
+    fun archiveOldProcessedRequests(daysThreshold: Int = 90): Int {
+        return try {
+            val threshold = LocalDateTime.now().minusDays(daysThreshold.toLong())
+            ArkaDatabase.instance.delete(DemandesDelegation) {
+                (it.dateValidation.isNotNull()) and
+                        (it.dateValidation less threshold) and
+                        (it.statut inList listOf(StatutDemande.REJETEE.name, StatutDemande.REVOQUEE.name))
             }
-            PorteePermission.CATEGORIE -> {
-                if (requestData.cibleId == null) {
-                    errors.add("L'ID de la catégorie est requis")
-                }
-            }
-            PorteePermission.ESPACE_COMPLET -> {
-                // Pas de cible requise pour l'espace complet
-            }
+        } catch (e: Exception) {
+            println("Erreur lors de l'archivage des anciennes demandes: ${e.message}")
+            0
         }
-
-        return errors
-    }
-
-    override fun validate(entity: DemandeDelegationEntity): List<String> {
-        val requestData = CreateDelegationRequestData(
-            proprietaireId = entity.proprietaireId,
-            beneficiaireId = entity.beneficiaireId,
-            portee = PorteePermission.valueOf(entity.portee),
-            cibleId = entity.cibleId,
-            typePermission = TypePermission.valueOf(entity.typePermission),
-            raisonDemande = entity.raisonDemande,
-            dateExpiration = entity.dateExpiration
-        )
-        return validateDelegationRequest(requestData)
     }
 }
-
-/**
- * Données pour créer une demande de délégation
- */
-data class CreateDelegationRequestData(
-    val proprietaireId: Int,
-    val beneficiaireId: Int,
-    val portee: PorteePermission,
-    val cibleId: Int?,
-    val typePermission: TypePermission,
-    val raisonDemande: String?,
-    val dateExpiration: LocalDateTime?
-)
-
-/**
- * Statistiques des demandes de délégation
- */
-data class DelegationStats(
-    val enAttente: Int,
-    val approuvees: Int,
-    val rejetees: Int,
-    val revoquees: Int,
-    val total: Int
-)

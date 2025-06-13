@@ -1,361 +1,183 @@
 package controllers
 
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import repositories.FamilyRepository
 import repositories.FamilyMemberRepository
-import ktorm.Famille
-import ktorm.MembreFamille
+import ktorm.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 
 /**
- * Controller responsible for family management operations.
- * Based on the Famille entity from ktorm models.
+ * Controller pour la gestion des familles
  *
- * Key Responsibilities:
- * - CRUD operations on families
- * - Family creation and initialization
- * - Family member statistics
- * - Family-wide settings and configuration
+ * Responsabilités:
+ * - CRUD des familles
+ * - Validation des données famille
+ * - Gestion des relations famille-membres
+ * - Statistiques et rapports famille
+ * - Vérifications de sécurité et intégrité
  *
- * Note: In Arka, a family is the root organizational unit.
- * Each family member belongs to exactly one family.
+ * Utilisé par: UI Components, MainController
+ * Utilise: FamilyRepository, FamilyMemberRepository
+ *
+ * Pattern: Controller Layer + Result Pattern (standardisé avec AuthController)
  */
 class FamilyController(
     private val familyRepository: FamilyRepository,
-    private val familyMemberRepository: FamilyMemberRepository,
-    private val authController: AuthController
+    private val familyMemberRepository: FamilyMemberRepository
 ) {
 
     /**
-     * Result wrapper for family operations
+     * Résultats des opérations sur les familles - PATTERN STANDARDISÉ
      */
-    sealed class FamilyResult {
-        data class Success<T>(val data: T) : FamilyResult()
-        data class Error(val message: String, val code: FamilyErrorCode) : FamilyResult()
+    sealed class FamilyResult<out T> {
+        data class Success<T>(val data: T) : FamilyResult<T>()
+        data class Error(val message: String, val code: FamilyErrorCode) : FamilyResult<Nothing>()
     }
 
     enum class FamilyErrorCode {
-        NOT_FOUND,
-        ALREADY_EXISTS,
+        FAMILY_NOT_FOUND,
+        FAMILY_ALREADY_EXISTS,
         INVALID_INPUT,
-        PERMISSION_DENIED,
         HAS_MEMBERS,
-        INTERNAL_ERROR,
-        CANNOT_DELETE_OWN_FAMILY
+        PERMISSION_DENIED,
+        INTERNAL_ERROR
     }
 
-    /**
-     * Get current user's family information
-     */
-    suspend fun getCurrentFamily(): FamilyResult = withContext(Dispatchers.IO) {
-        try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext FamilyResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyErrorCode.PERMISSION_DENIED
-                )
-
-            val family = familyRepository.findById(currentUser.familleId)
-                ?: return@withContext FamilyResult.Error(
-                    "Famille non trouvée",
-                    FamilyErrorCode.NOT_FOUND
-                )
-
-            return@withContext FamilyResult.Success(family)
-
-        } catch (e: Exception) {
-            return@withContext FamilyResult.Error(
-                "Erreur lors de la récupération de la famille: ${e.message}",
-                FamilyErrorCode.INTERNAL_ERROR
-            )
-        }
-    }
+    // ================================================================
+    // MÉTHODES DE CRÉATION ET MODIFICATION
+    // ================================================================
 
     /**
-     * Get a specific family by ID
-     * Only admins can view other families
+     * Crée une nouvelle famille
+     *
+     * @param familyName Nom de la famille
+     * @param createdBy ID du membre qui crée la famille (optionnel)
+     * @return Résultat de la création
      */
-    suspend fun getFamilyById(familyId: Int): FamilyResult = withContext(Dispatchers.IO) {
+    suspend fun createFamily(
+        familyName: String,
+        createdBy: Int? = null
+    ): FamilyResult<Famille> = withContext(Dispatchers.IO) {
         try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext FamilyResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyErrorCode.PERMISSION_DENIED
-                )
-
-            // Check permissions: only admins can view other families
-            if (familyId != currentUser.familleId && !currentUser.estAdmin) {
-                return@withContext FamilyResult.Error(
-                    "Accès refusé à cette famille",
-                    FamilyErrorCode.PERMISSION_DENIED
-                )
+            // Validation d'entrée
+            val validationError = validateFamilyName(familyName)
+            if (validationError != null) {
+                return@withContext FamilyResult.Error(validationError, FamilyErrorCode.INVALID_INPUT)
             }
 
-            val family = familyRepository.findById(familyId)
-                ?: return@withContext FamilyResult.Error(
-                    "Famille non trouvée",
-                    FamilyErrorCode.NOT_FOUND
-                )
-
-            return@withContext FamilyResult.Success(family)
-
-        } catch (e: Exception) {
-            return@withContext FamilyResult.Error(
-                "Erreur lors de la récupération de la famille: ${e.message}",
-                FamilyErrorCode.INTERNAL_ERROR
-            )
-        }
-    }
-
-    /**
-     * Create a new family
-     * This is typically done during initial setup
-     */
-    suspend fun createFamily(familyName: String): FamilyResult = withContext(Dispatchers.IO) {
-        try {
-            // Validation
-            if (familyName.isBlank()) {
-                return@withContext FamilyResult.Error(
-                    "Le nom de la famille est requis",
-                    FamilyErrorCode.INVALID_INPUT
-                )
-            }
-
-            if (familyName.length > 100) {
-                return@withContext FamilyResult.Error(
-                    "Le nom de la famille ne peut pas dépasser 100 caractères",
-                    FamilyErrorCode.INVALID_INPUT
-                )
-            }
-
-            // Check if family name already exists
+            // Vérifier si le nom existe déjà
             if (familyRepository.existsByName(familyName)) {
                 return@withContext FamilyResult.Error(
                     "Une famille avec ce nom existe déjà",
-                    FamilyErrorCode.ALREADY_EXISTS
+                    FamilyErrorCode.FAMILY_ALREADY_EXISTS
                 )
             }
 
-            // Create family based on ktorm Famille model
-            val newFamily = Famille(
-                familleId = 0, // Auto-generated by database
-                nomFamille = familyName.trim(),
-                dateCreationFamille = LocalDateTime.now()
-            )
+            // Créer la famille
+            val createdFamily = familyRepository.createFamille(familyName)
+                ?: return@withContext FamilyResult.Error(
+                    "Erreur lors de la création de la famille",
+                    FamilyErrorCode.INTERNAL_ERROR
+                )
 
-            val createdFamily = familyRepository.create(newFamily)
-
-            return@withContext FamilyResult.Success(createdFamily)
+            return@withContext FamilyResult.Success(createdFamily.toModel())
 
         } catch (e: Exception) {
             return@withContext FamilyResult.Error(
-                "Erreur lors de la création de la famille: ${e.message}",
+                "Erreur lors de la création: ${e.message}",
                 FamilyErrorCode.INTERNAL_ERROR
             )
         }
     }
 
     /**
-     * Update family information
-     * Only family admins can update family details
+     * Met à jour les informations d'une famille
+     *
+     * @param familyId ID de la famille
+     * @param newFamilyName Nouveau nom de la famille
+     * @return Résultat de la mise à jour
      */
-    suspend fun updateFamily(familyId: Int, familyName: String): FamilyResult = withContext(Dispatchers.IO) {
+    suspend fun updateFamily(
+        familyId: Int,
+        newFamilyName: String
+    ): FamilyResult<Famille> = withContext(Dispatchers.IO) {
         try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext FamilyResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyErrorCode.PERMISSION_DENIED
-                )
-
-            // Permission check: only admin of the same family can update
-            if (familyId != currentUser.familleId || !currentUser.estAdmin) {
-                return@withContext FamilyResult.Error(
-                    "Permissions insuffisantes pour modifier cette famille",
-                    FamilyErrorCode.PERMISSION_DENIED
-                )
+            // Validation d'entrée
+            val validationError = validateFamilyName(newFamilyName)
+            if (validationError != null) {
+                return@withContext FamilyResult.Error(validationError, FamilyErrorCode.INVALID_INPUT)
             }
 
-            // Find existing family
-            val existingFamily = familyRepository.findById(familyId)
-                ?: return@withContext FamilyResult.Error(
-                    "Famille non trouvée",
-                    FamilyErrorCode.NOT_FOUND
-                )
-
-            // Validation
-            if (familyName.isBlank()) {
-                return@withContext FamilyResult.Error(
-                    "Le nom de la famille est requis",
-                    FamilyErrorCode.INVALID_INPUT
-                )
-            }
-
-            if (familyName.length > 100) {
-                return@withContext FamilyResult.Error(
-                    "Le nom de la famille ne peut pas dépasser 100 caractères",
-                    FamilyErrorCode.INVALID_INPUT
-                )
-            }
-
-            // Check if new name conflicts (excluding current family)
-            if (familyName != existingFamily.nomFamille &&
-                familyRepository.existsByName(familyName)) {
-                return@withContext FamilyResult.Error(
-                    "Une famille avec ce nom existe déjà",
-                    FamilyErrorCode.ALREADY_EXISTS
-                )
-            }
-
-            // Update family - using copy from ktorm model
-            val updatedFamily = existingFamily.copy(
-                nomFamille = familyName.trim()
-            )
-
-            familyRepository.update(updatedFamily)
-
-            return@withContext FamilyResult.Success(updatedFamily)
-
-        } catch (e: Exception) {
-            return@withContext FamilyResult.Error(
-                "Erreur lors de la mise à jour de la famille: ${e.message}",
-                FamilyErrorCode.INTERNAL_ERROR
-            )
-        }
-    }
-
-    /**
-     * Delete a family
-     * Only possible if no members exist (except for system admin operations)
-     */
-    suspend fun deleteFamily(familyId: Int): FamilyResult = withContext(Dispatchers.IO) {
-        try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext FamilyResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyErrorCode.PERMISSION_DENIED
-                )
-
-            // Cannot delete own family
-            if (familyId == currentUser.familleId) {
-                return@withContext FamilyResult.Error(
-                    "Vous ne pouvez pas supprimer votre propre famille",
-                    FamilyErrorCode.CANNOT_DELETE_OWN_FAMILY
-                )
-            }
-
-            // Only super admin can delete families (implementation dependent)
-            if (!currentUser.estAdmin) {
-                return@withContext FamilyResult.Error(
-                    "Permissions insuffisantes pour supprimer une famille",
-                    FamilyErrorCode.PERMISSION_DENIED
-                )
-            }
-
-            // Check if family exists
+            // Vérifier que la famille existe
             val family = familyRepository.findById(familyId)
                 ?: return@withContext FamilyResult.Error(
                     "Famille non trouvée",
-                    FamilyErrorCode.NOT_FOUND
+                    FamilyErrorCode.FAMILY_NOT_FOUND
                 )
 
-            // Check if family has members
-            val memberCount = familyMemberRepository.countByFamilyId(familyId)
-            if (memberCount > 0) {
+            // Vérifier si le nouveau nom existe déjà (autre famille)
+            val existingFamily = familyRepository.findByName(newFamilyName)
+            if (existingFamily != null && existingFamily.familleId != familyId) {
                 return@withContext FamilyResult.Error(
-                    "Impossible de supprimer une famille contenant des membres",
-                    FamilyErrorCode.HAS_MEMBERS
+                    "Une autre famille avec ce nom existe déjà",
+                    FamilyErrorCode.FAMILY_ALREADY_EXISTS
                 )
             }
 
-            // Delete family
-            familyRepository.delete(familyId)
+            // Mettre à jour
+            family.nomFamille = newFamilyName
+            familyRepository.update(family)
 
-            return@withContext FamilyResult.Success(family)
+            return@withContext FamilyResult.Success(family.toModel())
 
         } catch (e: Exception) {
             return@withContext FamilyResult.Error(
-                "Erreur lors de la suppression de la famille: ${e.message}",
+                "Erreur lors de la mise à jour: ${e.message}",
                 FamilyErrorCode.INTERNAL_ERROR
             )
         }
     }
 
+    // ================================================================
+    // MÉTHODES DE CONSULTATION
+    // ================================================================
+
     /**
-     * Get family statistics and overview
+     * Récupère une famille par son ID
+     *
+     * @param familyId ID de la famille
+     * @return Résultat avec la famille trouvée
      */
-    suspend fun getFamilyStatistics(familyId: Int? = null): FamilyResult = withContext(Dispatchers.IO) {
+    suspend fun getFamilyById(familyId: Int): FamilyResult<Famille> = withContext(Dispatchers.IO) {
         try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext FamilyResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyErrorCode.PERMISSION_DENIED
-                )
-
-            val targetFamilyId = familyId ?: currentUser.familleId
-
-            // Permission check
-            if (targetFamilyId != currentUser.familleId && !currentUser.estAdmin) {
-                return@withContext FamilyResult.Error(
-                    "Accès refusé aux statistiques de cette famille",
-                    FamilyErrorCode.PERMISSION_DENIED
-                )
-            }
-
-            // Get family info
-            val family = familyRepository.findById(targetFamilyId)
+            val family = familyRepository.findById(familyId)
                 ?: return@withContext FamilyResult.Error(
                     "Famille non trouvée",
-                    FamilyErrorCode.NOT_FOUND
+                    FamilyErrorCode.FAMILY_NOT_FOUND
                 )
 
-            // Gather statistics
-            val memberCount = familyMemberRepository.countByFamilyId(targetFamilyId)
-            val adminCount = familyMemberRepository.countAdminsByFamilyId(targetFamilyId)
-            val responsibleCount = familyMemberRepository.countResponsiblesByFamilyId(targetFamilyId)
-
-            val statistics = FamilyStatistics(
-                family = family,
-                totalMembers = memberCount,
-                adminMembers = adminCount,
-                responsibleMembers = responsibleCount,
-                childrenMembers = memberCount - adminCount - responsibleCount,
-                creationDate = family.dateCreationFamille ?: LocalDateTime.now(),
-                lastActivity = familyMemberRepository.getLastActivityByFamilyId(targetFamilyId)
-            )
-
-            return@withContext FamilyResult.Success(statistics)
+            return@withContext FamilyResult.Success(family.toModel())
 
         } catch (e: Exception) {
             return@withContext FamilyResult.Error(
-                "Erreur lors de la récupération des statistiques: ${e.message}",
+                "Erreur lors de la récupération: ${e.message}",
                 FamilyErrorCode.INTERNAL_ERROR
             )
         }
     }
 
     /**
-     * Get all families (admin only - for system management)
+     * Récupère toutes les familles
+     *
+     * @return Résultat avec la liste des familles
      */
-    suspend fun getAllFamilies(): FamilyResult = withContext(Dispatchers.IO) {
+    suspend fun getAllFamilies(): FamilyResult<List<Famille>> = withContext(Dispatchers.IO) {
         try {
-            val currentUser = authController.getCurrentUser()
-                ?: return@withContext FamilyResult.Error(
-                    "Utilisateur non connecté",
-                    FamilyErrorCode.PERMISSION_DENIED
-                )
-
-            // Only super admin can list all families
-            if (!currentUser.estAdmin) {
-                return@withContext FamilyResult.Error(
-                    "Permissions insuffisantes",
-                    FamilyErrorCode.PERMISSION_DENIED
-                )
-            }
-
             val families = familyRepository.findAll()
+            val familyModels = families.map { it.toModel() }
 
-            return@withContext FamilyResult.Success(families)
+            return@withContext FamilyResult.Success(familyModels)
 
         } catch (e: Exception) {
             return@withContext FamilyResult.Error(
@@ -366,62 +188,195 @@ class FamilyController(
     }
 
     /**
-     * Initialize a new family with default setup
-     * This creates the family and sets up basic structure
+     * Recherche des familles par nom
+     *
+     * @param searchTerm Terme de recherche
+     * @return Résultat avec les familles trouvées
      */
-    suspend fun initializeFamily(
-        familyName: String,
-        adminFirstName: String,
-        adminEmail: String,
-        adminPassword: String
-    ): FamilyResult = withContext(Dispatchers.IO) {
+    suspend fun searchFamilies(searchTerm: String): FamilyResult<List<Famille>> = withContext(Dispatchers.IO) {
         try {
-            // Create family first
-            val familyResult = createFamily(familyName)
-            when (familyResult) {
-                is FamilyResult.Error -> return@withContext familyResult
-                is FamilyResult.Success -> {
-                    val family = familyResult.data as Famille
-
-                    // TODO: Create admin user through FamilyMemberController
-                    // This would typically involve calling familyMemberController.createFamilyMember
-                    // with admin privileges
-
-                    return@withContext FamilyResult.Success(
-                        FamilyInitializationResult(
-                            family = family,
-                            setupComplete = true,
-                            message = "Famille créée et initialisée avec succès"
-                        )
-                    )
-                }
+            if (searchTerm.isBlank()) {
+                return@withContext FamilyResult.Error(
+                    "Terme de recherche requis",
+                    FamilyErrorCode.INVALID_INPUT
+                )
             }
+
+            val families = familyRepository.searchByName(searchTerm)
+            val familyModels = families.map { it.toModel() }
+
+            return@withContext FamilyResult.Success(familyModels)
 
         } catch (e: Exception) {
             return@withContext FamilyResult.Error(
-                "Erreur lors de l'initialisation de la famille: ${e.message}",
+                "Erreur lors de la recherche: ${e.message}",
                 FamilyErrorCode.INTERNAL_ERROR
             )
         }
     }
+
+    // ================================================================
+    // MÉTHODES DE SUPPRESSION
+    // ================================================================
+
+    /**
+     * Supprime une famille
+     * Vérifie qu'elle n'a plus de membres avant suppression
+     *
+     * @param familyId ID de la famille à supprimer
+     * @return Résultat de la suppression
+     */
+    suspend fun deleteFamily(familyId: Int): FamilyResult<Unit> = withContext(Dispatchers.IO) {
+        try {
+            // Vérifier que la famille existe
+            val family = familyRepository.findById(familyId)
+                ?: return@withContext FamilyResult.Error(
+                    "Famille non trouvée",
+                    FamilyErrorCode.FAMILY_NOT_FOUND
+                )
+
+            // Vérifier qu'elle n'a plus de membres
+            if (familyRepository.hasMembers(familyId)) {
+                return@withContext FamilyResult.Error(
+                    "Impossible de supprimer une famille qui a encore des membres",
+                    FamilyErrorCode.HAS_MEMBERS
+                )
+            }
+
+            // Supprimer
+            val deleted = familyRepository.delete(familyId)
+            if (deleted == 0) {
+                return@withContext FamilyResult.Error(
+                    "Aucune famille supprimée",
+                    FamilyErrorCode.INTERNAL_ERROR
+                )
+            }
+
+            return@withContext FamilyResult.Success(Unit)
+
+        } catch (e: Exception) {
+            return@withContext FamilyResult.Error(
+                "Erreur lors de la suppression: ${e.message}",
+                FamilyErrorCode.INTERNAL_ERROR
+            )
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES DE STATISTIQUES
+    // ================================================================
+
+    /**
+     * Obtient les statistiques d'une famille
+     *
+     * @param familyId ID de la famille
+     * @return Résultat avec les statistiques
+     */
+    suspend fun getFamilyStatistics(familyId: Int): FamilyResult<FamilyStatistics> = withContext(Dispatchers.IO) {
+        try {
+            // Vérifier que la famille existe
+            val family = familyRepository.findById(familyId)
+                ?: return@withContext FamilyResult.Error(
+                    "Famille non trouvée",
+                    FamilyErrorCode.FAMILY_NOT_FOUND
+                )
+
+            // Obtenir les détails complets
+            val details = familyRepository.getFamilyDetails(familyId)
+                ?: return@withContext FamilyResult.Error(
+                    "Impossible d'obtenir les détails de la famille",
+                    FamilyErrorCode.INTERNAL_ERROR
+                )
+
+            val stats = FamilyStatistics(
+                familyId = familyId,
+                familyName = details["familyName"] as String,
+                memberCount = details["memberCount"] as Int,
+                adminCount = details["adminCount"] as Int,
+                responsibleCount = details["responsibleCount"] as Int,
+                childrenCount = details["childrenCount"] as Int,
+                creationDate = details["creationDate"] as LocalDateTime?,
+                lastMemberAdded = details["lastMemberAdded"] as LocalDateTime?
+            )
+
+            return@withContext FamilyResult.Success(stats)
+
+        } catch (e: Exception) {
+            return@withContext FamilyResult.Error(
+                "Erreur lors du calcul des statistiques: ${e.message}",
+                FamilyErrorCode.INTERNAL_ERROR
+            )
+        }
+    }
+
+    /**
+     * Obtient les statistiques générales de toutes les familles
+     *
+     * @return Résultat avec les statistiques globales
+     */
+    suspend fun getGlobalStatistics(): FamilyResult<GlobalFamilyStatistics> = withContext(Dispatchers.IO) {
+        try {
+            val stats = familyRepository.getFamilyStatistics()
+
+            val globalStats = GlobalFamilyStatistics(
+                totalFamilies = stats["totalFamilies"] as Int,
+                familiesCreatedLastMonth = stats["familiesCreatedLastMonth"] as Int,
+                familiesCreatedLastWeek = stats["familiesCreatedLastWeek"] as Int,
+                oldestFamilyDate = stats["oldestFamilyDate"] as LocalDateTime?,
+                newestFamilyDate = stats["newestFamilyDate"] as LocalDateTime?
+            )
+
+            return@withContext FamilyResult.Success(globalStats)
+
+        } catch (e: Exception) {
+            return@withContext FamilyResult.Error(
+                "Erreur lors du calcul des statistiques globales: ${e.message}",
+                FamilyErrorCode.INTERNAL_ERROR
+            )
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES PRIVÉES DE VALIDATION
+    // ================================================================
+
+    private fun validateFamilyName(familyName: String): String? {
+        return when {
+            familyName.isBlank() -> "Le nom de famille ne peut pas être vide"
+            familyName.length < 2 -> "Le nom de famille doit contenir au moins 2 caractères"
+            familyName.length > 100 -> "Le nom de famille ne peut pas dépasser 100 caractères"
+            !familyName.matches(Regex("^[a-zA-ZÀ-ÿ0-9\\s\\-']+$")) ->
+                "Le nom de famille contient des caractères non autorisés"
+            else -> null
+        }
+    }
 }
 
+// ================================================================
+// DATA CLASSES POUR LES RÉSULTATS
+// ================================================================
+
 /**
- * Data classes for family operations results
- * Based on the Famille ktorm model structure
+ * Statistiques d'une famille spécifique
  */
 data class FamilyStatistics(
-    val family: Famille,
-    val totalMembers: Int,
-    val adminMembers: Int,
-    val responsibleMembers: Int,
-    val childrenMembers: Int,
-    val creationDate: LocalDateTime,
-    val lastActivity: LocalDateTime?
+    val familyId: Int,
+    val familyName: String,
+    val memberCount: Int,
+    val adminCount: Int,
+    val responsibleCount: Int,
+    val childrenCount: Int,
+    val creationDate: LocalDateTime?,
+    val lastMemberAdded: LocalDateTime?
 )
 
-data class FamilyInitializationResult(
-    val family: Famille,
-    val setupComplete: Boolean,
-    val message: String
+/**
+ * Statistiques globales de toutes les familles
+ */
+data class GlobalFamilyStatistics(
+    val totalFamilies: Int,
+    val familiesCreatedLastMonth: Int,
+    val familiesCreatedLastWeek: Int,
+    val oldestFamilyDate: LocalDateTime?,
+    val newestFamilyDate: LocalDateTime?
 )

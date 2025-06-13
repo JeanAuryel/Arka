@@ -1,513 +1,661 @@
 package repositories
 
-import ktorm.*
-import org.ktorm.dsl.*
+import org.ktorm.entity.sequenceOf
+import org.ktorm.entity.find
 import org.ktorm.entity.filter
-import org.ktorm.entity.sortedByDescending
 import org.ktorm.entity.toList
+import org.ktorm.dsl.*
 import org.ktorm.schema.Column
+import ktorm.*
 import java.time.LocalDateTime
 
 /**
- * Repository pour la gestion des fichiers dans Arka
+ * Repository pour la gestion des fichiers
+ *
+ * Responsabilités:
+ * - CRUD des fichiers
+ * - Gestion des propriétaires et créateurs
+ * - Recherche et filtrage des fichiers
+ * - Statistiques et requêtes métier
+ * - Validation et vérifications d'intégrité
+ *
+ * Utilisé par: FileController, FolderController, PermissionController
  */
-class FileRepository : BaseRepository<FichierEntity, org.ktorm.schema.Table<FichierEntity>>() {
+class FileRepository : BaseRepository<FichierEntity, Fichiers>() {
 
     override val table = Fichiers
 
-    override fun getIdColumn(entity: FichierEntity): Column<Int> = table.fichierId
+    /**
+     * Obtient la clé primaire d'un fichier
+     */
+    override fun FichierEntity.getPrimaryKey(): Int = this.fichierId
+    override fun getPrimaryKeyColumn(): Column<Int> = Fichiers.fichierId
 
     /**
-     * Trouve tous les fichiers d'un dossier
-     * @param dossierId L'ID du dossier
-     * @return Liste des fichiers du dossier
+     * Met à jour un fichier
      */
-    fun findByFolder(dossierId: Int): List<FichierEntity> {
-        return try {
-            entities.filter { table.dossierId eq dossierId }
-                .sortedByDescending { table.dateCreationFichier }
-                .toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des fichiers du dossier $dossierId: ${e.message}")
-            emptyList()
+    override fun update(entity: FichierEntity): Int {
+        return ArkaDatabase.instance.update(Fichiers) {
+            set(it.nomFichier, entity.nomFichier)
+            set(it.typeFichier, entity.typeFichier)
+            set(it.tailleFichier, entity.tailleFichier)
+            set(it.contenuFichier, entity.contenuFichier)
+            set(it.cheminFichier, entity.cheminFichier)
+            set(it.dateDerniereModifFichier, LocalDateTime.now())
+            where { it.fichierId eq entity.fichierId }
         }
     }
 
+    // ================================================================
+    // MÉTHODES DE RECHERCHE PAR DOSSIER ET PROPRIÉTAIRE
+    // ================================================================
+
     /**
-     * Trouve tous les fichiers d'un propriétaire
-     * @param proprietaireId L'ID du propriétaire
+     * Récupère tous les fichiers d'un dossier
+     *
+     * @param dossierId ID du dossier
+     * @return Liste des fichiers du dossier triés par date de création
+     */
+    fun getFichiersByDossier(dossierId: Int): List<FichierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { it.dossierId eq dossierId }
+            .toList()
+            .sortedByDescending { it.dateCreationFichier ?: LocalDateTime.MIN }
+    }
+
+    /**
+     * Récupère tous les fichiers d'un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
      * @return Liste des fichiers du propriétaire
      */
-    fun findByOwner(proprietaireId: Int): List<FichierEntity> {
-        return try {
-            entities.filter { table.proprietaireId eq proprietaireId }
-                .sortedByDescending { table.dateCreationFichier }
-                .toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des fichiers du propriétaire $proprietaireId: ${e.message}")
-            emptyList()
-        }
+    fun getFichiersByProprietaire(proprietaireId: Int): List<FichierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { it.proprietaireId eq proprietaireId }
+            .toList()
+            .sortedByDescending { it.dateCreationFichier ?: LocalDateTime.MIN }
     }
 
     /**
-     * Trouve tous les fichiers créés par un membre
-     * @param createurId L'ID du créateur
+     * Récupère tous les fichiers créés par un membre
+     *
+     * @param createurId ID du créateur
      * @return Liste des fichiers créés par ce membre
      */
-    fun findByCreator(createurId: Int): List<FichierEntity> {
-        return try {
-            entities.filter { table.createurId eq createurId }
-                .sortedByDescending { table.dateCreationFichier }
-                .toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des fichiers du créateur $createurId: ${e.message}")
-            emptyList()
-        }
+    fun getFichiersByCreateur(createurId: Int): List<FichierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { it.createurId eq createurId }
+            .toList()
+            .sortedByDescending { it.dateCreationFichier ?: LocalDateTime.MIN }
     }
 
     /**
      * Trouve un fichier par nom dans un dossier
-     * @param nomFichier Le nom du fichier
-     * @param dossierId L'ID du dossier
+     *
+     * @param nomFichier Nom du fichier
+     * @param dossierId ID du dossier
      * @return Le fichier trouvé ou null
      */
-    fun findByNameInFolder(nomFichier: String, dossierId: Int): FichierEntity? {
-        return try {
-            entities.find {
-                (table.nomFichier eq nomFichier) and (table.dossierId eq dossierId)
+    fun getFichierByNameInDossier(nomFichier: String, dossierId: Int): FichierEntity? {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .find {
+                (it.nomFichier eq nomFichier.trim()) and (it.dossierId eq dossierId)
             }
+    }
+
+    /**
+     * Compte les fichiers d'un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
+     * @return Nombre de fichiers
+     */
+    fun countByProprietaire(proprietaireId: Int): Int {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { it.proprietaireId eq proprietaireId }
+            .toList()
+            .size
+    }
+
+    /**
+     * Compte les fichiers dans un dossier
+     *
+     * @param dossierId ID du dossier
+     * @return Nombre de fichiers
+     */
+    fun countByDossier(dossierId: Int): Int {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { it.dossierId eq dossierId }
+            .toList()
+            .size
+    }
+
+    // ================================================================
+    // MÉTHODES DE VALIDATION ET VÉRIFICATION
+    // ================================================================
+
+    /**
+     * Vérifie si un fichier avec ce nom existe dans un dossier
+     *
+     * @param nomFichier Nom du fichier
+     * @param dossierId ID du dossier
+     * @param excludeId ID à exclure de la vérification (pour les mises à jour)
+     * @return true si le nom existe déjà
+     */
+    fun existsByNameInDossier(nomFichier: String, dossierId: Int, excludeId: Int? = null): Boolean {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { fichier ->
+                val nameCondition = (fichier.nomFichier eq nomFichier.trim()) and (fichier.dossierId eq dossierId)
+                if (excludeId != null) {
+                    nameCondition and (fichier.fichierId neq excludeId)
+                } else {
+                    nameCondition
+                }
+            }
+            .toList()
+            .isNotEmpty()
+    }
+
+    // ================================================================
+    // MÉTHODES DE RECHERCHE AVANCÉE
+    // ================================================================
+
+    /**
+     * Recherche des fichiers par nom (recherche partielle)
+     *
+     * @param searchTerm Terme de recherche
+     * @param proprietaireId ID du propriétaire (optionnel)
+     * @param dossierId ID du dossier (optionnel)
+     * @return Liste des fichiers trouvés
+     */
+    fun searchFichiersByName(
+        searchTerm: String,
+        proprietaireId: Int? = null,
+        dossierId: Int? = null
+    ): List<FichierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { fichier ->
+                var condition = fichier.nomFichier like "%${searchTerm.trim()}%"
+
+                proprietaireId?.let {
+                    condition = condition and (fichier.proprietaireId eq it)
+                }
+                dossierId?.let {
+                    condition = condition and (fichier.dossierId eq it)
+                }
+
+                condition
+            }
+            .toList()
+            .sortedBy { it.nomFichier }
+    }
+
+    /**
+     * Récupère les fichiers par type
+     *
+     * @param typeFichier Type de fichier (extension)
+     * @param proprietaireId ID du propriétaire (optionnel)
+     * @return Liste des fichiers du type spécifié
+     */
+    fun getFichiersByType(typeFichier: String, proprietaireId: Int? = null): List<FichierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { fichier ->
+                var condition = fichier.typeFichier eq typeFichier.lowercase()
+
+                proprietaireId?.let {
+                    condition = condition and (fichier.proprietaireId eq it)
+                }
+
+                condition
+            }
+            .toList()
+            .sortedByDescending { it.dateCreationFichier ?: LocalDateTime.MIN }
+    }
+
+    /**
+     * Récupère les fichiers récents d'un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
+     * @param limit Nombre maximum de fichiers
+     * @return Liste des fichiers récents
+     */
+    fun getFichiersRecents(proprietaireId: Int, limit: Int = 10): List<FichierEntity> {
+        return getFichiersByProprietaire(proprietaireId)
+            .sortedByDescending { it.dateDerniereModifFichier ?: LocalDateTime.MIN }
+            .take(limit)
+    }
+
+    /**
+     * Récupère les fichiers volumineux d'un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
+     * @param tailleMinimaOctets Taille minimum en octets
+     * @return Liste des fichiers volumineux triés par taille
+     */
+    fun getFichiersVolumineux(proprietaireId: Int, tailleMinimaOctets: Long = 10_000_000): List<FichierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter {
+                (it.proprietaireId eq proprietaireId) and (it.tailleFichier greater tailleMinimaOctets)
+            }
+            .toList()
+            .sortedByDescending { it.tailleFichier }
+    }
+
+    /**
+     * Récupère les fichiers créés dans une période
+     *
+     * @param since Date de début
+     * @param until Date de fin (optionnelle)
+     * @param proprietaireId ID du propriétaire (optionnel)
+     * @return Liste des fichiers de la période
+     */
+    fun getFichiersParPeriode(
+        since: LocalDateTime,
+        until: LocalDateTime? = null,
+        proprietaireId: Int? = null
+    ): List<FichierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { fichier ->
+                var condition = fichier.dateCreationFichier greaterEq since
+
+                until?.let {
+                    condition = condition and (fichier.dateCreationFichier lessEq it)
+                }
+                proprietaireId?.let {
+                    condition = condition and (fichier.proprietaireId eq it)
+                }
+
+                condition
+            }
+            .toList()
+            .sortedByDescending { it.dateCreationFichier ?: LocalDateTime.MIN }
+    }
+
+    // ================================================================
+    // MÉTHODES DE STATISTIQUES ET ANALYSE
+    // ================================================================
+
+    /**
+     * Calcule la taille totale des fichiers d'un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
+     * @return Taille totale en octets
+     */
+    fun getTailleTotaleByProprietaire(proprietaireId: Int): Long {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { it.proprietaireId eq proprietaireId }
+            .toList()
+            .sumOf { it.tailleFichier }
+    }
+
+    /**
+     * Calcule la taille totale des fichiers dans un dossier
+     *
+     * @param dossierId ID du dossier
+     * @return Taille totale en octets
+     */
+    fun getTailleTotaleByDossier(dossierId: Int): Long {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { it.dossierId eq dossierId }
+            .toList()
+            .sumOf { it.tailleFichier }
+    }
+
+    /**
+     * Obtient les statistiques par type de fichier pour un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
+     * @return Map type -> (nombre, taille totale)
+     */
+    fun getStatistiquesParType(proprietaireId: Int): Map<String, Pair<Int, Long>> {
+        val fichiers = getFichiersByProprietaire(proprietaireId)
+
+        return fichiers
+            .groupBy { it.typeFichier ?: "unknown" }
+            .mapValues { (_, fichiersList) ->
+                Pair(
+                    fichiersList.size,
+                    fichiersList.sumOf { it.tailleFichier }
+                )
+            }
+    }
+
+    /**
+     * Obtient les statistiques complètes d'un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
+     * @return Map avec toutes les statistiques
+     */
+    fun getStatistiquesCompletes(proprietaireId: Int): Map<String, Any> {
+        val fichiers = getFichiersByProprietaire(proprietaireId)
+        val nombreFichiers = fichiers.size
+        val tailleTotale = fichiers.sumOf { it.tailleFichier }
+        val derniereFichier = fichiers.maxByOrNull { it.dateDerniereModifFichier ?: LocalDateTime.MIN }
+        val typesStats = getStatistiquesParType(proprietaireId)
+
+        return mapOf(
+            "nombreFichiers" to nombreFichiers,
+            "tailleTotale" to tailleTotale,
+            "derniereModification" to (derniereFichier?.dateDerniereModifFichier ?: "Aucune"),
+            "nombreTypes" to typesStats.size,
+            "typeLePlusUtilise" to (typesStats.maxByOrNull { it.value.first }?.key ?: "Aucun")
+        )
+    }
+
+    /**
+     * Obtient l'utilisation d'espace par dossier pour un propriétaire
+     *
+     * @param proprietaireId ID du propriétaire
+     * @return Map dossierId -> taille totale
+     */
+    fun getUtilisationEspaceParDossier(proprietaireId: Int): Map<Int, Long> {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { it.proprietaireId eq proprietaireId }
+            .toList()
+            .groupBy { it.dossierId }
+            .mapValues { (_, fichiers) -> fichiers.sumOf { it.tailleFichier } }
+    }
+
+    // ================================================================
+    // MÉTHODES DE CRÉATION ET MISE À JOUR
+    // ================================================================
+
+    /**
+     * Crée un nouveau fichier avec validation
+     *
+     * @param nomFichier Nom du fichier
+     * @param typeFichier Type/extension du fichier
+     * @param tailleFichier Taille en octets
+     * @param contenuFichier Contenu binaire (optionnel)
+     * @param cheminFichier Chemin externe (optionnel)
+     * @param createurId ID du créateur
+     * @param proprietaireId ID du propriétaire
+     * @param dossierId ID du dossier de destination
+     * @return Le fichier créé ou null en cas d'erreur
+     */
+    fun createFichier(
+        nomFichier: String,
+        typeFichier: String?,
+        tailleFichier: Long,
+        contenuFichier: ByteArray? = null,
+        cheminFichier: String? = null,
+        createurId: Int,
+        proprietaireId: Int,
+        dossierId: Int
+    ): FichierEntity? {
+        // Validation
+        val validationErrors = validateNomFichier(nomFichier, tailleFichier)
+        if (validationErrors.isNotEmpty()) {
+            println("Erreurs de validation: ${validationErrors.joinToString(", ")}")
+            return null
+        }
+
+        // Vérifier l'unicité dans le dossier
+        if (existsByNameInDossier(nomFichier, dossierId)) {
+            println("Un fichier avec ce nom existe déjà dans ce dossier")
+            return null
+        }
+
+        return try {
+            val fichier = FichierEntity {
+                this.nomFichier = nomFichier.trim()
+                this.typeFichier = typeFichier?.lowercase()
+                this.tailleFichier = tailleFichier
+                this.contenuFichier = contenuFichier
+                this.cheminFichier = cheminFichier
+                this.createurId = createurId
+                this.proprietaireId = proprietaireId
+                this.dossierId = dossierId
+                this.dateCreationFichier = LocalDateTime.now()
+                this.dateDerniereModifFichier = LocalDateTime.now()
+            }
+
+            create(fichier)
         } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche du fichier '$nomFichier': ${e.message}")
+            println("Erreur lors de la création du fichier: ${e.message}")
             null
         }
     }
 
     /**
-     * Trouve les fichiers par type
-     * @param typeFichier Le type de fichier (extension)
-     * @param proprietaireId Optionnel: limiter à un propriétaire
-     * @return Liste des fichiers du type spécifié
+     * Met à jour le nom d'un fichier avec validation
+     *
+     * @param fichierId ID du fichier
+     * @param nouveauNom Nouveau nom
+     * @return true si la mise à jour a réussi
      */
-    fun findByType(typeFichier: String, proprietaireId: Int? = null): List<FichierEntity> {
-        return try {
-            var query = entities.filter { table.typeFichier eq typeFichier }
+    fun updateNomFichier(fichierId: Int, nouveauNom: String): Boolean {
+        val fichier = findById(fichierId) ?: return false
 
-            proprietaireId?.let { query = query.filter { table.proprietaireId eq it } }
-
-            query.sortedByDescending { table.dateCreationFichier }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche par type '$typeFichier': ${e.message}")
-            emptyList()
-        }
-    }
-
-    /**
-     * Crée un nouveau fichier
-     * @param fileData Les données du fichier
-     * @return Le résultat de l'opération
-     */
-    fun createFile(fileData: CreateFileData): RepositoryResult<Fichier> {
-        // Validation
-        val validationErrors = validateFile(fileData)
+        // Validation du nom
+        val validationErrors = validateNomFichier(nouveauNom, fichier.tailleFichier)
         if (validationErrors.isNotEmpty()) {
-            return RepositoryResult.ValidationError(validationErrors)
+            return false
         }
 
-        // Vérifier l'unicité dans le dossier
-        if (findByNameInFolder(fileData.nomFichier, fileData.dossierId) != null) {
-            return RepositoryResult.Error("Un fichier avec ce nom existe déjà dans ce dossier")
+        // Vérifier l'unicité (sauf pour le fichier actuel)
+        if (existsByNameInDossier(nouveauNom, fichier.dossierId, fichierId)) {
+            return false
         }
 
         return try {
-            val fichier = FichierEntity {
-                this.nomFichier = fileData.nomFichier
-                this.typeFichier = fileData.typeFichier
-                this.tailleFichier = fileData.tailleFichier
-                this.contenuFichier = fileData.contenuFichier
-                this.cheminFichier = fileData.cheminFichier
-                this.createurId = fileData.createurId
-                this.proprietaireId = fileData.proprietaireId
-                this.dossierId = fileData.dossierId
-                this.dateCreationFichier = LocalDateTime.now()
-                this.dateDerniereModifFichier = LocalDateTime.now()
+            val rowsAffected = ArkaDatabase.instance.update(Fichiers) {
+                set(it.nomFichier, nouveauNom.trim())
+                set(it.dateDerniereModifFichier, LocalDateTime.now())
+                where { it.fichierId eq fichierId }
             }
-
-            if (save(fichier)) {
-                RepositoryResult.Success(fichier.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la création du fichier")
-            }
+            rowsAffected > 0
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la création: ${e.message}")
+            println("Erreur lors de la mise à jour du nom du fichier $fichierId: ${e.message}")
+            false
         }
     }
 
     /**
-     * Met à jour un fichier
-     * @param fichierId L'ID du fichier
-     * @param updateData Les nouvelles données
-     * @return Le résultat de l'opération
+     * Met à jour le contenu d'un fichier
+     *
+     * @param fichierId ID du fichier
+     * @param nouveauContenu Nouveau contenu binaire
+     * @return true si la mise à jour a réussi
      */
-    fun updateFile(fichierId: Int, updateData: UpdateFileData): RepositoryResult<Fichier> {
+    fun updateContenuFichier(fichierId: Int, nouveauContenu: ByteArray): Boolean {
         return try {
-            val fichier = findById(fichierId)
-            if (fichier == null) {
-                return RepositoryResult.Error("Fichier non trouvé")
+            val rowsAffected = ArkaDatabase.instance.update(Fichiers) {
+                set(it.contenuFichier, nouveauContenu)
+                set(it.tailleFichier, nouveauContenu.size.toLong())
+                set(it.dateDerniereModifFichier, LocalDateTime.now())
+                where { it.fichierId eq fichierId }
             }
-
-            // Vérifier l'unicité si le nom change
-            updateData.nomFichier?.let { nouveauNom ->
-                if (nouveauNom != fichier.nomFichier) {
-                    val existing = findByNameInFolder(nouveauNom, fichier.dossierId)
-                    if (existing != null && existing.fichierId != fichierId) {
-                        return RepositoryResult.Error("Un fichier avec ce nom existe déjà dans ce dossier")
-                    }
-                }
-                fichier.nomFichier = nouveauNom
-            }
-
-            // Mettre à jour les autres champs
-            updateData.contenuFichier?.let {
-                fichier.contenuFichier = it
-                fichier.tailleFichier = it.size.toLong()
-            }
-            updateData.cheminFichier?.let { fichier.cheminFichier = it }
-
-            fichier.dateDerniereModifFichier = LocalDateTime.now()
-
-            if (update(fichier)) {
-                RepositoryResult.Success(fichier.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la mise à jour")
-            }
+            rowsAffected > 0
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la mise à jour: ${e.message}")
+            println("Erreur lors de la mise à jour du contenu du fichier $fichierId: ${e.message}")
+            false
         }
     }
 
     /**
      * Déplace un fichier vers un autre dossier
-     * @param fichierId L'ID du fichier
-     * @param nouveauDossierId L'ID du nouveau dossier
-     * @return Le résultat de l'opération
+     *
+     * @param fichierId ID du fichier
+     * @param nouveauDossierId ID du nouveau dossier
+     * @return true si le déplacement a réussi
      */
-    fun moveFile(fichierId: Int, nouveauDossierId: Int): RepositoryResult<Fichier> {
+    fun deplacerFichier(fichierId: Int, nouveauDossierId: Int): Boolean {
+        val fichier = findById(fichierId) ?: return false
+
+        // Vérifier l'unicité dans le nouveau dossier
+        if (existsByNameInDossier(fichier.nomFichier, nouveauDossierId)) {
+            println("Un fichier avec ce nom existe déjà dans le dossier de destination")
+            return false
+        }
+
         return try {
-            val fichier = findById(fichierId)
-            if (fichier == null) {
-                return RepositoryResult.Error("Fichier non trouvé")
+            val rowsAffected = ArkaDatabase.instance.update(Fichiers) {
+                set(it.dossierId, nouveauDossierId)
+                set(it.dateDerniereModifFichier, LocalDateTime.now())
+                where { it.fichierId eq fichierId }
             }
-
-            // Vérifier l'unicité dans le nouveau dossier
-            if (findByNameInFolder(fichier.nomFichier, nouveauDossierId) != null) {
-                return RepositoryResult.Error("Un fichier avec ce nom existe déjà dans le dossier de destination")
-            }
-
-            fichier.dossierId = nouveauDossierId
-            fichier.dateDerniereModifFichier = LocalDateTime.now()
-
-            if (update(fichier)) {
-                RepositoryResult.Success(fichier.toModel())
-            } else {
-                RepositoryResult.Error("Échec du déplacement")
-            }
+            rowsAffected > 0
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors du déplacement: ${e.message}")
+            println("Erreur lors du déplacement du fichier $fichierId: ${e.message}")
+            false
         }
     }
 
     /**
      * Change le propriétaire d'un fichier
-     * @param fichierId L'ID du fichier
-     * @param nouveauProprietaireId L'ID du nouveau propriétaire
-     * @return Le résultat de l'opération
+     *
+     * @param fichierId ID du fichier
+     * @param nouveauProprietaireId ID du nouveau propriétaire
+     * @return true si le changement a réussi
      */
-    fun changeOwner(fichierId: Int, nouveauProprietaireId: Int): RepositoryResult<Fichier> {
+    fun changerProprietaire(fichierId: Int, nouveauProprietaireId: Int): Boolean {
         return try {
-            val fichier = findById(fichierId)
-            if (fichier == null) {
-                return RepositoryResult.Error("Fichier non trouvé")
+            val rowsAffected = ArkaDatabase.instance.update(Fichiers) {
+                set(it.proprietaireId, nouveauProprietaireId)
+                set(it.dateDerniereModifFichier, LocalDateTime.now())
+                where { it.fichierId eq fichierId }
             }
-
-            fichier.proprietaireId = nouveauProprietaireId
-            fichier.dateDerniereModifFichier = LocalDateTime.now()
-
-            if (update(fichier)) {
-                RepositoryResult.Success(fichier.toModel())
-            } else {
-                RepositoryResult.Error("Échec du changement de propriétaire")
-            }
+            rowsAffected > 0
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors du changement de propriétaire: ${e.message}")
+            println("Erreur lors du changement de propriétaire du fichier $fichierId: ${e.message}")
+            false
         }
     }
 
-    /**
-     * Recherche des fichiers par nom
-     * @param nomPartiel Une partie du nom à rechercher
-     * @param proprietaireId Optionnel: limiter à un propriétaire
-     * @param typeFichier Optionnel: limiter à un type
-     * @return Liste des fichiers correspondants
-     */
-    fun searchByName(
-        nomPartiel: String,
-        proprietaireId: Int? = null,
-        typeFichier: String? = null
-    ): List<FichierEntity> {
-        return try {
-            var query = entities.filter { table.nomFichier like "%$nomPartiel%" }
-
-            proprietaireId?.let { query = query.filter { table.proprietaireId eq it } }
-            typeFichier?.let { query = query.filter { table.typeFichier eq it } }
-
-            query.sortedByDescending { table.dateCreationFichier }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche par nom '$nomPartiel': ${e.message}")
-            emptyList()
-        }
-    }
+    // ================================================================
+    // MÉTHODES DE SUPPRESSION ET NETTOYAGE
+    // ================================================================
 
     /**
-     * Obtient les fichiers récents d'un propriétaire
-     * @param proprietaireId L'ID du propriétaire
-     * @param limite Le nombre maximum de fichiers
-     * @return Liste des fichiers récents
+     * Supprime tous les fichiers d'un dossier
+     * Utilisé lors de la suppression d'un dossier
+     *
+     * @param dossierId ID du dossier
+     * @return Nombre de fichiers supprimés
      */
-    fun getRecentFiles(proprietaireId: Int, limite: Int = 10): List<FichierEntity> {
+    fun deleteAllByDossier(dossierId: Int): Int {
         return try {
-            entities.filter { table.proprietaireId eq proprietaireId }
-                .sortedByDescending { table.dateDerniereModifFichier }
-                .take(limite)
-                .toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la récupération des fichiers récents: ${e.message}")
-            emptyList()
-        }
-    }
-
-    /**
-     * Obtient les fichiers volumineux d'un propriétaire
-     * @param proprietaireId L'ID du propriétaire
-     * @param tailleMinimaOctets La taille minimum en octets
-     * @return Liste des fichiers volumineux
-     */
-    fun getLargeFiles(proprietaireId: Int, tailleMinimaOctets: Long = 10_000_000): List<FichierEntity> {
-        return try {
-            entities.filter {
-                (table.proprietaireId eq proprietaireId) and
-                        (table.tailleFichier greater tailleMinimaOctets)
-            }.sortedByDescending { table.tailleFichier }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la récupération des fichiers volumineux: ${e.message}")
-            emptyList()
-        }
-    }
-
-    /**
-     * Obtient les statistiques de fichiers d'un propriétaire
-     * @param proprietaireId L'ID du propriétaire
-     * @return Les statistiques des fichiers
-     */
-    fun getFileStats(proprietaireId: Int): FileStats {
-        return try {
-            val totalFiles = count()
-            val ownerFiles = database.from(Fichiers)
-                .select(
-                    count(),
-                    sum(Fichiers.tailleFichier),
-                    max(Fichiers.dateDerniereModifFichier)
-                )
-                .where { Fichiers.proprietaireId eq proprietaireId }
-                .map { row ->
-                    Triple(
-                        row.getInt(1) ?: 0,
-                        row.getLong(2) ?: 0L,
-                        row.getLocalDateTime(3)
-                    )
-                }.first()
-
-            // Statistiques par type
-            val typeStats = database.from(Fichiers)
-                .select(Fichiers.typeFichier, count(), sum(Fichiers.tailleFichier))
-                .where { Fichiers.proprietaireId eq proprietaireId }
-                .groupBy(Fichiers.typeFichier)
-                .map { row ->
-                    FileTypeStats(
-                        type = row.getString(1) ?: "unknown",
-                        count = row.getInt(2) ?: 0,
-                        totalSize = row.getLong(3) ?: 0L
-                    )
-                }
-
-            FileStats(
-                totalFiles = ownerFiles.first,
-                totalSize = ownerFiles.second,
-                lastModified = ownerFiles.third,
-                typeStats = typeStats
-            )
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors du calcul des stats fichiers: ${e.message}")
-            FileStats(0, 0L, null, emptyList())
-        }
-    }
-
-    /**
-     * Obtient l'espace disque utilisé par dossier pour un propriétaire
-     * @param proprietaireId L'ID du propriétaire
-     * @return Map des dossiers et leur taille
-     */
-    fun getSpaceUsageByFolder(proprietaireId: Int): Map<Int, Long> {
-        return try {
-            database.from(Fichiers)
-                .select(Fichiers.dossierId, sum(Fichiers.tailleFichier))
-                .where { Fichiers.proprietaireId eq proprietaireId }
-                .groupBy(Fichiers.dossierId)
-                .associate { row ->
-                    row.getInt(1) to (row.getLong(2) ?: 0L)
-                }
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors du calcul de l'espace par dossier: ${e.message}")
-            emptyMap()
-        }
-    }
-
-    /**
-     * Nettoie les fichiers orphelins (sans dossier parent)
-     * @return Le nombre de fichiers supprimés
-     */
-    fun cleanOrphanFiles(): Int {
-        return try {
-            // Supprimer les fichiers dont le dossier n'existe plus
-            database.delete(Fichiers) {
-                it.dossierId notInList (
-                        database.from(Dossiers).select(Dossiers.dossierId)
-                        )
+            ArkaDatabase.instance.delete(Fichiers) {
+                it.dossierId eq dossierId
             }
         } catch (e: Exception) {
-            println("⚠️ Erreur lors du nettoyage des fichiers orphelins: ${e.message}")
+            println("Erreur lors de la suppression des fichiers du dossier $dossierId: ${e.message}")
             0
         }
     }
 
     /**
-     * Extrait le type de fichier depuis le nom
+     * Supprime tous les fichiers d'un propriétaire
+     * Utilisé lors de la suppression d'un membre
+     *
+     * @param proprietaireId ID du propriétaire
+     * @return Nombre de fichiers supprimés
      */
-    private fun extractFileType(nomFichier: String): String {
-        return nomFichier.substringAfterLast('.', "").lowercase()
+    fun deleteAllByProprietaire(proprietaireId: Int): Int {
+        return try {
+            ArkaDatabase.instance.delete(Fichiers) {
+                it.proprietaireId eq proprietaireId
+            }
+        } catch (e: Exception) {
+            println("Erreur lors de la suppression des fichiers du propriétaire $proprietaireId: ${e.message}")
+            0
+        }
     }
 
     /**
-     * Valide les données d'un fichier
+     * Nettoie les fichiers orphelins (dossier inexistant)
+     *
+     * @return Nombre de fichiers nettoyés
      */
-    private fun validateFile(fileData: CreateFileData): List<String> {
+    fun cleanOrphanFiles(): Int {
+        return try {
+            // Supprimer les fichiers dont le dossier n'existe plus
+            val dossiersExistants = ArkaDatabase.instance.sequenceOf(Dossiers)
+                .toList()
+                .map { it.dossierId }
+                .toSet()
+
+            val fichiersOrphelins = ArkaDatabase.instance.sequenceOf(Fichiers)
+                .toList()
+                .filter { it.dossierId !in dossiersExistants }
+
+            var deleted = 0
+            fichiersOrphelins.forEach { fichier ->
+                if (delete(fichier.fichierId) > 0) {
+                    deleted++
+                }
+            }
+
+            deleted
+        } catch (e: Exception) {
+            println("Erreur lors du nettoyage des fichiers orphelins: ${e.message}")
+            0
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES UTILITAIRES
+    // ================================================================
+
+    /**
+     * Valide le nom et la taille d'un fichier
+     *
+     * @param nomFichier Le nom à valider
+     * @param tailleFichier La taille en octets
+     * @return Liste des erreurs de validation
+     */
+    fun validateNomFichier(nomFichier: String, tailleFichier: Long): List<String> {
         val errors = mutableListOf<String>()
 
-        if (fileData.nomFichier.isBlank()) {
+        if (nomFichier.isBlank()) {
             errors.add("Le nom du fichier ne peut pas être vide")
         }
 
-        if (fileData.nomFichier.length > 255) {
+        if (nomFichier.length > 255) {
             errors.add("Le nom du fichier ne peut pas dépasser 255 caractères")
         }
 
-        // Caractères interdits
+        // Caractères interdits dans les noms de fichiers
         val forbiddenChars = listOf('/', '\\', ':', '*', '?', '"', '<', '>', '|')
-        val foundForbidden = forbiddenChars.filter { fileData.nomFichier.contains(it) }
+        val foundForbidden = forbiddenChars.filter { nomFichier.contains(it) }
         if (foundForbidden.isNotEmpty()) {
             errors.add("Le nom du fichier contient des caractères interdits: ${foundForbidden.joinToString(", ")}")
         }
 
-        if (fileData.tailleFichier < 0) {
+        if (tailleFichier < 0) {
             errors.add("La taille du fichier ne peut pas être négative")
         }
 
         // Limite de taille (100 MB par défaut)
-        if (fileData.tailleFichier > 100_000_000) {
+        if (tailleFichier > 100_000_000) {
             errors.add("Le fichier dépasse la taille maximale autorisée (100 MB)")
         }
 
         return errors
     }
 
-    override fun validate(entity: FichierEntity): List<String> {
-        val fileData = CreateFileData(
-            nomFichier = entity.nomFichier,
-            typeFichier = entity.typeFichier,
-            tailleFichier = entity.tailleFichier,
-            contenuFichier = entity.contenuFichier,
-            cheminFichier = entity.cheminFichier,
-            createurId = entity.createurId,
-            proprietaireId = entity.proprietaireId,
-            dossierId = entity.dossierId
-        )
-        return validateFile(fileData)
+    /**
+     * Extrait le type de fichier depuis le nom
+     *
+     * @param nomFichier Nom du fichier
+     * @return Extension en minuscules
+     */
+    fun extractFileType(nomFichier: String): String {
+        return nomFichier.substringAfterLast('.', "").lowercase()
+    }
+
+    /**
+     * Formate la taille d'un fichier en format lisible
+     *
+     * @param taille Taille en octets
+     * @return Taille formatée (ex: "1.5 MB")
+     */
+    fun formatFileSize(taille: Long): String {
+        return when {
+            taille < 1024 -> "$taille B"
+            taille < 1024 * 1024 -> "${String.format("%.1f", taille / 1024.0)} KB"
+            taille < 1024 * 1024 * 1024 -> "${String.format("%.1f", taille / (1024.0 * 1024.0))} MB"
+            else -> "${String.format("%.1f", taille / (1024.0 * 1024.0 * 1024.0))} GB"
+        }
     }
 }
-
-/**
- * Données pour créer un fichier
- */
-data class CreateFileData(
-    val nomFichier: String,
-    val typeFichier: String?,
-    val tailleFichier: Long,
-    val contenuFichier: ByteArray?,
-    val cheminFichier: String?,
-    val createurId: Int,
-    val proprietaireId: Int,
-    val dossierId: Int
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-        other as CreateFileData
-        return nomFichier == other.nomFichier &&
-                typeFichier == other.typeFichier &&
-                tailleFichier == other.tailleFichier &&
-                contenuFichier?.contentEquals(other.contenuFichier) == true &&
-                cheminFichier == other.cheminFichier &&
-                createurId == other.createurId &&
-                proprietaireId == other.proprietaireId &&
-                dossierId == other.dossierId
-    }
-
-    override fun hashCode(): Int {
-        var result = nomFichier.hashCode()
-        result = 31 * result + (typeFichier?.hashCode() ?: 0)
-        result = 31 * result + tailleFichier.hashCode()
-        result = 31 * result + (contenuFichier?.contentHashCode() ?: 0)
-        result = 31 * result + (cheminFichier?.hashCode() ?: 0)
-        result = 31 * result + createurId
-        result = 31 * result + proprietaireId
-        result = 31 * result + dossierId
-        return result
-    }
-}
-
-/**
- * Données pour mettre à jour un fichier
- */
-data class UpdateFileData(
-    val nomFichier: String? = null,
-    val contenuFichier: ByteArray? = null,
-    val cheminFichier: String? = null
-)
-
-/**
- * Statistiques des fichiers
- */
-data class FileStats(
-    val totalFiles: Int,
-    val totalSize: Long,
-    val lastModified: LocalDateTime?,
-    val typeStats: List<FileTypeStats>
-)
-
-/**
- * Statistiques par type de fichier
- */
-data class FileTypeStats(
-    val type: String,
-    val count: Int,
-    val totalSize: Long
-)

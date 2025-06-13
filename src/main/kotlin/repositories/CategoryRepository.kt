@@ -1,234 +1,385 @@
 package repositories
 
-
-import ktorm.*
-import org.ktorm.dsl.*
+import org.ktorm.entity.sequenceOf
+import org.ktorm.entity.find
 import org.ktorm.entity.filter
 import org.ktorm.entity.toList
+import org.ktorm.dsl.*
 import org.ktorm.schema.Column
+import ktorm.*
 import java.time.LocalDateTime
 
 /**
- * Repository pour la gestion des catégories dans Arka
+ * Repository pour la gestion des catégories
+ *
+ * Responsabilités:
+ * - CRUD des catégories
+ * - Gestion des catégories par espace
+ * - Validation et recherche de catégories
+ * - Statistiques et requêtes métier
+ *
+ * Utilisé par: CategoryController, FolderController, DelegationController
  */
-class CategoryRepository : BaseRepository<CategorieEntity, org.ktorm.schema.Table<CategorieEntity>>() {
+class CategoryRepository : BaseRepository<CategorieEntity, Categories>() {
 
     override val table = Categories
 
-    override fun getIdColumn(entity: CategorieEntity): Column<Int> = table.categorieId
+    /**
+     * Obtient la clé primaire d'une catégorie
+     */
+    override fun CategorieEntity.getPrimaryKey(): Int = this.categorieId
+    override fun getPrimaryKeyColumn(): Column<Int> = Categories.categorieId
 
     /**
-     * Trouve toutes les catégories d'un espace
-     * @param espaceId L'ID de l'espace
+     * Met à jour une catégorie
+     */
+    override fun update(entity: CategorieEntity): Int {
+        return ArkaDatabase.instance.update(Categories) {
+            set(it.nomCategorie, entity.nomCategorie)
+            set(it.descriptionCategorie, entity.descriptionCategorie)
+            where { it.categorieId eq entity.categorieId }
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES DE RECHERCHE PAR ESPACE
+    // ================================================================
+
+    /**
+     * Récupère toutes les catégories d'un espace
+     *
+     * @param espaceId ID de l'espace
      * @return Liste des catégories de l'espace
      */
-    fun findBySpace(espaceId: Int): List<CategorieEntity> {
-        return try {
-            entities.filter { table.espaceId eq espaceId }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des catégories de l'espace $espaceId: ${e.message}")
-            emptyList()
-        }
+    fun getCategoriesByEspace(espaceId: Int): List<CategorieEntity> {
+        return ArkaDatabase.instance.sequenceOf(Categories)
+            .filter { it.espaceId eq espaceId }
+            .toList()
+            .sortedBy { it.nomCategorie }
     }
 
     /**
-     * Trouve une catégorie par nom dans un espace donné
+     * Trouve une catégorie par nom dans un espace
+     *
      * @param nomCategorie Le nom de la catégorie
-     * @param espaceId L'ID de l'espace
+     * @param espaceId ID de l'espace
      * @return La catégorie trouvée ou null
      */
-    fun findByNameInSpace(nomCategorie: String, espaceId: Int): CategorieEntity? {
-        return try {
-            entities.find {
-                (table.nomCategorie eq nomCategorie) and (table.espaceId eq espaceId)
+    fun getCategorieByNameAndEspace(nomCategorie: String, espaceId: Int): CategorieEntity? {
+        return ArkaDatabase.instance.sequenceOf(Categories)
+            .find {
+                (it.nomCategorie eq nomCategorie.trim()) and (it.espaceId eq espaceId)
             }
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche de la catégorie '$nomCategorie': ${e.message}")
-            null
+    }
+
+    /**
+     * Compte les catégories dans un espace
+     *
+     * @param espaceId ID de l'espace
+     * @return Nombre de catégories
+     */
+    fun countByEspace(espaceId: Int): Int {
+        return ArkaDatabase.instance.sequenceOf(Categories)
+            .filter { it.espaceId eq espaceId }
+            .toList()
+            .size
+    }
+
+    // ================================================================
+    // MÉTHODES DE VALIDATION ET VÉRIFICATION
+    // ================================================================
+
+    /**
+     * Vérifie si une catégorie avec ce nom existe dans un espace
+     *
+     * @param nomCategorie Le nom de la catégorie
+     * @param espaceId ID de l'espace
+     * @param excludeId ID à exclure de la vérification (pour les mises à jour)
+     * @return true si le nom existe déjà
+     */
+    fun existsByNameInEspace(nomCategorie: String, espaceId: Int, excludeId: Int? = null): Boolean {
+        return ArkaDatabase.instance.sequenceOf(Categories)
+            .filter { categorie ->
+                val nameCondition = (categorie.nomCategorie eq nomCategorie.trim()) and (categorie.espaceId eq espaceId)
+                if (excludeId != null) {
+                    nameCondition and (categorie.categorieId neq excludeId)
+                } else {
+                    nameCondition
+                }
+            }
+            .toList()
+            .isNotEmpty()
+    }
+
+    // ================================================================
+    // MÉTHODES DE RECHERCHE AVANCÉE
+    // ================================================================
+
+    /**
+     * Recherche des catégories par nom (recherche partielle)
+     *
+     * @param searchTerm Terme de recherche
+     * @param espaceId ID de l'espace (optionnel)
+     * @return Liste des catégories trouvées
+     */
+    fun searchCategoriesByName(searchTerm: String, espaceId: Int? = null): List<CategorieEntity> {
+        return ArkaDatabase.instance.sequenceOf(Categories)
+            .filter { categorie ->
+                val nameCondition = categorie.nomCategorie like "%${searchTerm.trim()}%"
+                if (espaceId != null) {
+                    nameCondition and (categorie.espaceId eq espaceId)
+                } else {
+                    nameCondition
+                }
+            }
+            .toList()
+            .sortedBy { it.nomCategorie }
+    }
+
+    /**
+     * Récupère les catégories créées récemment
+     *
+     * @param espaceId ID de l'espace (optionnel)
+     * @param limit Nombre maximum de catégories
+     * @return Liste des catégories récentes
+     */
+    fun getRecentCategories(espaceId: Int? = null, limit: Int = 10): List<CategorieEntity> {
+        val categories = if (espaceId != null) {
+            getCategoriesByEspace(espaceId)
+        } else {
+            findAll()
+        }
+
+        return categories
+            .sortedByDescending { it.dateCreationCategorie }
+            .take(limit)
+    }
+
+    /**
+     * Trouve toutes les catégories triées par nom
+     *
+     * @return Liste des catégories triées alphabétiquement
+     */
+    fun findAllSorted(): List<CategorieEntity> {
+        return findAll().sortedBy { it.nomCategorie }
+    }
+
+    // ================================================================
+    // MÉTHODES DE STATISTIQUES ET COMPTAGE
+    // ================================================================
+
+    /**
+     * Compte le nombre de dossiers dans une catégorie
+     *
+     * @param categorieId ID de la catégorie
+     * @return Nombre de dossiers
+     */
+    fun countDossiersInCategorie(categorieId: Int): Int {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter { it.categorieId eq categorieId }
+            .toList()
+            .size
+    }
+
+    /**
+     * Récupère toutes les catégories avec le nombre de dossiers
+     *
+     * @param espaceId ID de l'espace (optionnel)
+     * @return Liste de paires (catégorie, nombre de dossiers)
+     */
+    fun getCategoriesWithDossierCount(espaceId: Int? = null): List<Pair<CategorieEntity, Int>> {
+        val categories = if (espaceId != null) {
+            getCategoriesByEspace(espaceId)
+        } else {
+            findAllSorted()
+        }
+
+        return categories.map { categorie ->
+            val count = countDossiersInCategorie(categorie.categorieId)
+            Pair(categorie, count)
         }
     }
 
     /**
-     * Crée une nouvelle catégorie
-     * @param nomCategorie Le nom de la catégorie
-     * @param descriptionCategorie La description (optionnelle)
-     * @param espaceId L'ID de l'espace parent
-     * @return Le résultat de l'opération
+     * Obtient les statistiques complètes d'une catégorie
+     *
+     * @param categorieId ID de la catégorie
+     * @return Map avec les statistiques
      */
-    fun createCategory(
-        nomCategorie: String,
-        descriptionCategorie: String? = null,
-        espaceId: Int
-    ): RepositoryResult<Categorie> {
+    fun getStatistiquesCategorie(categorieId: Int): Map<String, Any> {
+        val nombreDossiers = countDossiersInCategorie(categorieId)
 
-        // Validation
-        val validationErrors = validateCategory(nomCategorie)
-        if (validationErrors.isNotEmpty()) {
-            return RepositoryResult.ValidationError(validationErrors)
+        // Compter les fichiers via les dossiers
+        val dossiersIds = ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter { it.categorieId eq categorieId }
+            .toList()
+            .map { it.dossierId }
+
+        val nombreFichiers = if (dossiersIds.isNotEmpty()) {
+            ArkaDatabase.instance.sequenceOf(Fichiers)
+                .filter { it.dossierId inList dossiersIds }
+                .toList()
+                .size
+        } else {
+            0
+        }
+
+        // Calculer la taille totale des fichiers
+        val tailleTotale = if (dossiersIds.isNotEmpty()) {
+            ArkaDatabase.instance.sequenceOf(Fichiers)
+                .filter { it.dossierId inList dossiersIds }
+                .toList()
+                .sumOf { it.tailleFichier }
+        } else {
+            0L
+        }
+
+        return mapOf(
+            "nombreDossiers" to nombreDossiers,
+            "nombreFichiers" to nombreFichiers,
+            "tailleTotale" to tailleTotale
+        )
+    }
+
+    // ================================================================
+    // MÉTHODES DE MISE À JOUR SPÉCIFIQUES
+    // ================================================================
+
+    /**
+     * Met à jour uniquement la description d'une catégorie
+     *
+     * @param categorieId ID de la catégorie
+     * @param nouvelleDescription Nouvelle description
+     * @return true si la mise à jour a réussi
+     */
+    fun updateDescription(categorieId: Int, nouvelleDescription: String?): Boolean {
+        return try {
+            val rowsAffected = ArkaDatabase.instance.update(Categories) {
+                set(it.descriptionCategorie, nouvelleDescription)
+                where { it.categorieId eq categorieId }
+            }
+            rowsAffected > 0
+        } catch (e: Exception) {
+            println("Erreur lors de la mise à jour de la description de la catégorie $categorieId: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Met à jour le nom d'une catégorie avec validation
+     *
+     * @param categorieId ID de la catégorie
+     * @param nouveauNom Nouveau nom
+     * @return true si la mise à jour a réussi
+     */
+    fun updateName(categorieId: Int, nouveauNom: String): Boolean {
+        val categorie = findById(categorieId) ?: return false
+
+        if (existsByNameInEspace(nouveauNom, categorie.espaceId, categorieId)) {
+            return false // Le nom existe déjà
+        }
+
+        return try {
+            val rowsAffected = ArkaDatabase.instance.update(Categories) {
+                set(it.nomCategorie, nouveauNom.trim())
+                where { it.categorieId eq categorieId }
+            }
+            rowsAffected > 0
+        } catch (e: Exception) {
+            println("Erreur lors de la mise à jour du nom de la catégorie $categorieId: ${e.message}")
+            false
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES DE SUPPRESSION AVEC VÉRIFICATIONS
+    // ================================================================
+
+    /**
+     * Vérifie si une catégorie peut être supprimée (pas de dossiers)
+     *
+     * @param categorieId ID de la catégorie
+     * @return true si la catégorie peut être supprimée
+     */
+    fun canBeDeleted(categorieId: Int): Boolean {
+        return countDossiersInCategorie(categorieId) == 0
+    }
+
+    /**
+     * Supprime une catégorie avec cascade (tous ses dossiers)
+     * ATTENTION: Supprime définitivement tous les dossiers !
+     *
+     * @param categorieId ID de la catégorie
+     * @return true si la suppression a réussi
+     */
+    fun deleteWithCascade(categorieId: Int): Boolean {
+        return try {
+            transaction {
+                // La suppression cascade est gérée par la contrainte FK
+                val rowsAffected = delete(categorieId)
+                rowsAffected > 0
+            }
+        } catch (e: Exception) {
+            println("Erreur lors de la suppression de la catégorie $categorieId: ${e.message}")
+            false
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES DE CRÉATION AVEC VALIDATION
+    // ================================================================
+
+    /**
+     * Crée une nouvelle catégorie avec validation
+     *
+     * @param nomCategorie Nom de la catégorie
+     * @param descriptionCategorie Description (optionnelle)
+     * @param espaceId ID de l'espace parent
+     * @return La catégorie créée ou null en cas d'erreur
+     */
+    fun createCategorie(
+        nomCategorie: String,
+        descriptionCategorie: String?,
+        espaceId: Int
+    ): CategorieEntity? {
+        // Validation du nom
+        if (nomCategorie.isBlank() || nomCategorie.length < 2 || nomCategorie.length > 100) {
+            println("Nom de catégorie invalide: '$nomCategorie'")
+            return null
         }
 
         // Vérifier l'unicité dans l'espace
-        if (findByNameInSpace(nomCategorie, espaceId) != null) {
-            return RepositoryResult.Error("Une catégorie avec ce nom existe déjà dans cet espace")
+        if (existsByNameInEspace(nomCategorie, espaceId)) {
+            println("Une catégorie avec ce nom existe déjà dans cet espace")
+            return null
         }
 
         return try {
             val categorie = CategorieEntity {
-                this.nomCategorie = nomCategorie
+                this.nomCategorie = nomCategorie.trim()
                 this.descriptionCategorie = descriptionCategorie
                 this.espaceId = espaceId
                 this.dateCreationCategorie = LocalDateTime.now()
             }
 
-            if (save(categorie)) {
-                RepositoryResult.Success(categorie.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la création de la catégorie")
-            }
+            create(categorie)
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la création: ${e.message}")
+            println("Erreur lors de la création de la catégorie: ${e.message}")
+            null
         }
     }
 
-    /**
-     * Met à jour une catégorie
-     * @param categorieId L'ID de la catégorie
-     * @param nomCategorie Le nouveau nom
-     * @param descriptionCategorie La nouvelle description
-     * @return Le résultat de l'opération
-     */
-    fun updateCategory(
-        categorieId: Int,
-        nomCategorie: String,
-        descriptionCategorie: String? = null
-    ): RepositoryResult<Categorie> {
-
-        val validationErrors = validateCategory(nomCategorie)
-        if (validationErrors.isNotEmpty()) {
-            return RepositoryResult.ValidationError(validationErrors)
-        }
-
-        return try {
-            val categorie = findById(categorieId)
-            if (categorie == null) {
-                return RepositoryResult.Error("Catégorie non trouvée")
-            }
-
-            // Vérifier l'unicité (sauf pour la catégorie actuelle)
-            val existing = findByNameInSpace(nomCategorie, categorie.espaceId)
-            if (existing != null && existing.categorieId != categorieId) {
-                return RepositoryResult.Error("Une catégorie avec ce nom existe déjà dans cet espace")
-            }
-
-            categorie.nomCategorie = nomCategorie
-            categorie.descriptionCategorie = descriptionCategorie
-
-            if (update(categorie)) {
-                RepositoryResult.Success(categorie.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la mise à jour")
-            }
-        } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la mise à jour: ${e.message}")
-        }
-    }
-
-    /**
-     * Obtient le nombre de dossiers dans une catégorie
-     * @param categorieId L'ID de la catégorie
-     * @return Le nombre de dossiers
-     */
-    fun getFolderCount(categorieId: Int): Int {
-        return try {
-            database.from(Dossiers)
-                .select(count())
-                .where { Dossiers.categorieId eq categorieId }
-                .map { row -> row.getInt(1) }
-                .first()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors du comptage des dossiers pour la catégorie $categorieId: ${e.message}")
-            0
-        }
-    }
-
-    /**
-     * Recherche des catégories par nom partiel
-     * @param nomPartiel Une partie du nom à rechercher
-     * @param espaceId Optionnel: limiter à un espace
-     * @return Liste des catégories correspondantes
-     */
-    fun searchByName(nomPartiel: String, espaceId: Int? = null): List<CategorieEntity> {
-        return try {
-            var query = entities.filter { table.nomCategorie like "%$nomPartiel%" }
-
-            if (espaceId != null) {
-                query = query.filter { table.espaceId eq espaceId }
-            }
-
-            query.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche par nom '$nomPartiel': ${e.message}")
-            emptyList()
-        }
-    }
-
-    /**
-     * Supprime une catégorie avec tous ses dossiers (CASCADE)
-     * @param categorieId L'ID de la catégorie à supprimer
-     * @return Le résultat de l'opération
-     */
-    fun deleteCategoryWithFolders(categorieId: Int): RepositoryResult<Boolean> {
-        return withTransaction {
-            try {
-                // Vérifier s'il y a des dossiers
-                val folderCount = getFolderCount(categorieId)
-                if (folderCount > 0) {
-                    println("⚠️ Suppression de la catégorie avec $folderCount dossier(s)")
-                }
-
-                // La suppression CASCADE est gérée par la base de données
-                val deleted = deleteById(categorieId)
-
-                if (deleted) {
-                    RepositoryResult.Success(true)
-                } else {
-                    RepositoryResult.Error("Catégorie non trouvée ou déjà supprimée")
-                }
-            } catch (e: Exception) {
-                RepositoryResult.Error("Erreur lors de la suppression: ${e.message}")
-            }
-        } ?: RepositoryResult.Error("Erreur de transaction")
-    }
-
-    /**
-     * Récupère toutes les catégories avec le nombre de dossiers
-     * @param espaceId Optionnel: limiter à un espace
-     * @return Liste des catégories avec statistiques
-     */
-    fun findAllWithFolderCount(espaceId: Int? = null): List<CategorieAvecStats> {
-        return try {
-            val categories = if (espaceId != null) {
-                findBySpace(espaceId)
-            } else {
-                findAll()
-            }
-
-            categories.map { categorie ->
-                CategorieAvecStats(
-                    categorie = categorie.toModel(),
-                    nombreDossiers = getFolderCount(categorie.categorieId)
-                )
-            }
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la récupération des catégories avec stats: ${e.message}")
-            emptyList()
-        }
-    }
+    // ================================================================
+    // MÉTHODES UTILITAIRES
+    // ================================================================
 
     /**
      * Valide le nom d'une catégorie
+     *
+     * @param nomCategorie Le nom à valider
+     * @return Liste des erreurs de validation
      */
-    private fun validateCategory(nomCategorie: String): List<String> {
+    fun validateNomCategorie(nomCategorie: String): List<String> {
         val errors = mutableListOf<String>()
 
         if (nomCategorie.isBlank()) {
@@ -245,16 +396,4 @@ class CategoryRepository : BaseRepository<CategorieEntity, org.ktorm.schema.Tabl
 
         return errors
     }
-
-    override fun validate(entity: CategorieEntity): List<String> {
-        return validateCategory(entity.nomCategorie)
-    }
 }
-
-/**
- * Classe de données pour les statistiques de catégorie
- */
-data class CategorieAvecStats(
-    val categorie: Categorie,
-    val nombreDossiers: Int
-)

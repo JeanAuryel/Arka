@@ -1,131 +1,465 @@
 package repositories
 
-import ktorm.*
-import org.ktorm.dsl.*
+import org.ktorm.entity.sequenceOf
+import org.ktorm.entity.find
 import org.ktorm.entity.filter
 import org.ktorm.entity.toList
+import org.ktorm.dsl.*
 import org.ktorm.schema.Column
+import ktorm.*
 import java.time.LocalDateTime
 
 /**
- * Repository pour la gestion des dossiers dans Arka
+ * Repository pour la gestion des dossiers
+ *
+ * Responsabilités:
+ * - CRUD des dossiers
+ * - Gestion de la hiérarchie des dossiers (parent/enfant)
+ * - Recherche et navigation dans l'arborescence
+ * - Statistiques et requêtes métier
+ * - Validation et vérifications d'intégrité
+ *
+ * Utilisé par: FolderController, FileController, PermissionController
  */
-class FolderRepository : BaseRepository<DossierEntity, org.ktorm.schema.Table<DossierEntity>>() {
+class FolderRepository : BaseRepository<DossierEntity, Dossiers>() {
 
     override val table = Dossiers
 
-    override fun getIdColumn(entity: DossierEntity): Column<Int> = table.dossierId
+    /**
+     * Obtient la clé primaire d'un dossier
+     */
+    override fun DossierEntity.getPrimaryKey(): Int = this.dossierId
+    override fun getPrimaryKeyColumn(): Column<Int> = Dossiers.dossierId
 
     /**
-     * Trouve tous les dossiers d'un membre
-     * @param membreId L'ID du membre
+     * Met à jour un dossier
+     */
+    override fun update(entity: DossierEntity): Int {
+        return ArkaDatabase.instance.update(Dossiers) {
+            set(it.nomDossier, entity.nomDossier)
+            set(it.dateDerniereModifDossier, LocalDateTime.now())
+            set(it.dossierParentId, entity.dossierParentId)
+            where { it.dossierId eq entity.dossierId }
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES DE RECHERCHE PAR MEMBRE ET CATÉGORIE
+    // ================================================================
+
+    /**
+     * Récupère tous les dossiers d'un membre
+     *
+     * @param membreFamilleId ID du membre
      * @return Liste des dossiers du membre
      */
-    fun findByMember(membreId: Int): List<DossierEntity> {
-        return try {
-            entities.filter { table.membreFamilleId eq membreId }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des dossiers du membre $membreId: ${e.message}")
-            emptyList()
-        }
+    fun getDossiersByMembre(membreFamilleId: Int): List<DossierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter { it.membreFamilleId eq membreFamilleId }
+            .toList()
+            .sortedBy { it.nomDossier }
     }
 
     /**
-     * Trouve tous les dossiers d'une catégorie
-     * @param categorieId L'ID de la catégorie
+     * Récupère tous les dossiers d'une catégorie
+     *
+     * @param categorieId ID de la catégorie
      * @return Liste des dossiers de la catégorie
      */
-    fun findByCategory(categorieId: Int): List<DossierEntity> {
-        return try {
-            entities.filter { table.categorieId eq categorieId }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des dossiers de la catégorie $categorieId: ${e.message}")
-            emptyList()
-        }
+    fun getDossiersByCategorie(categorieId: Int): List<DossierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter { it.categorieId eq categorieId }
+            .toList()
+            .sortedBy { it.nomDossier }
     }
 
     /**
-     * Trouve tous les dossiers d'un membre dans une catégorie
-     * @param membreId L'ID du membre
-     * @param categorieId L'ID de la catégorie
+     * Récupère les dossiers d'un membre dans une catégorie spécifique
+     *
+     * @param membreFamilleId ID du membre
+     * @param categorieId ID de la catégorie
      * @return Liste des dossiers correspondants
      */
-    fun findByMemberAndCategory(membreId: Int, categorieId: Int): List<DossierEntity> {
-        return try {
-            entities.filter {
-                (table.membreFamilleId eq membreId) and (table.categorieId eq categorieId)
-            }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des dossiers: ${e.message}")
-            emptyList()
-        }
+    fun getDossiersByMembreAndCategorie(membreFamilleId: Int, categorieId: Int): List<DossierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter {
+                (it.membreFamilleId eq membreFamilleId) and (it.categorieId eq categorieId)
+            }
+            .toList()
+            .sortedBy { it.nomDossier }
     }
 
     /**
-     * Trouve les sous-dossiers d'un dossier parent
-     * @param dossierParentId L'ID du dossier parent
-     * @return Liste des sous-dossiers
+     * Compte les dossiers d'un membre
+     *
+     * @param membreFamilleId ID du membre
+     * @return Nombre de dossiers
      */
-    fun findSubFolders(dossierParentId: Int): List<DossierEntity> {
-        return try {
-            entities.filter { table.dossierParentId eq dossierParentId }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des sous-dossiers: ${e.message}")
-            emptyList()
-        }
+    fun countByMembre(membreFamilleId: Int): Int {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter { it.membreFamilleId eq membreFamilleId }
+            .toList()
+            .size
     }
 
     /**
-     * Trouve les dossiers racine (sans parent) d'un membre dans une catégorie
-     * @param membreId L'ID du membre
-     * @param categorieId L'ID de la catégorie
+     * Compte les dossiers dans une catégorie
+     *
+     * @param categorieId ID de la catégorie
+     * @return Nombre de dossiers
+     */
+    fun countByCategorie(categorieId: Int): Int {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter { it.categorieId eq categorieId }
+            .toList()
+            .size
+    }
+
+    // ================================================================
+    // MÉTHODES DE GESTION DE LA HIÉRARCHIE
+    // ================================================================
+
+    /**
+     * Récupère les dossiers racine (sans parent) d'un membre dans une catégorie
+     *
+     * @param membreFamilleId ID du membre
+     * @param categorieId ID de la catégorie
      * @return Liste des dossiers racine
      */
-    fun findRootFolders(membreId: Int, categorieId: Int): List<DossierEntity> {
-        return try {
-            entities.filter {
-                (table.membreFamilleId eq membreId) and
-                        (table.categorieId eq categorieId) and
-                        (table.dossierParentId.isNull())
-            }.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche des dossiers racine: ${e.message}")
-            emptyList()
-        }
+    fun getDossiersRacine(membreFamilleId: Int, categorieId: Int): List<DossierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter {
+                (it.membreFamilleId eq membreFamilleId) and
+                        (it.categorieId eq categorieId) and
+                        it.dossierParentId.isNull()
+            }
+            .toList()
+            .sortedBy { it.nomDossier }
     }
 
     /**
-     * Crée un nouveau dossier
-     * @param nomDossier Le nom du dossier
-     * @param membreId L'ID du propriétaire
-     * @param categorieId L'ID de la catégorie
-     * @param dossierParentId L'ID du dossier parent (optionnel)
-     * @param estParDefault Si c'est un dossier par défaut
-     * @return Le résultat de l'opération
+     * Récupère les sous-dossiers d'un dossier parent
+     *
+     * @param dossierParentId ID du dossier parent
+     * @return Liste des sous-dossiers
      */
-    fun createFolder(
+    fun getSousDossiers(dossierParentId: Int): List<DossierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter { it.dossierParentId eq dossierParentId }
+            .toList()
+            .sortedBy { it.nomDossier }
+    }
+
+    /**
+     * Vérifie si un dossier a des sous-dossiers
+     *
+     * @param dossierId ID du dossier
+     * @return true si le dossier a des sous-dossiers
+     */
+    fun hasSousDossiers(dossierId: Int): Boolean {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter { it.dossierParentId eq dossierId }
+            .toList()
+            .isNotEmpty()
+    }
+
+    /**
+     * Obtient le chemin complet d'un dossier (hiérarchie)
+     *
+     * @param dossierId ID du dossier
+     * @return Liste des dossiers du chemin (de la racine au dossier)
+     */
+    fun getCheminComplet(dossierId: Int): List<DossierEntity> {
+        val chemin = mutableListOf<DossierEntity>()
+        var currentId: Int? = dossierId
+
+        while (currentId != null) {
+            val dossier = findById(currentId)
+            if (dossier != null) {
+                chemin.add(0, dossier) // Ajouter au début
+                currentId = dossier.dossierParentId
+            } else {
+                break
+            }
+        }
+
+        return chemin
+    }
+
+    /**
+     * Récupère tous les sous-dossiers récursivement
+     *
+     * @param dossierId ID du dossier racine
+     * @return Liste de tous les sous-dossiers (récursif)
+     */
+    fun getAllSousDosiersRecursive(dossierId: Int): List<DossierEntity> {
+        val allSousDossiers = mutableListOf<DossierEntity>()
+
+        fun collectSousDossiers(parentId: Int) {
+            val sousDossiers = getSousDossiers(parentId)
+            allSousDossiers.addAll(sousDossiers)
+            sousDossiers.forEach { collectSousDossiers(it.dossierId) }
+        }
+
+        collectSousDossiers(dossierId)
+        return allSousDossiers
+    }
+
+    // ================================================================
+    // MÉTHODES DE VALIDATION ET VÉRIFICATION
+    // ================================================================
+
+    /**
+     * Vérifie si un dossier avec ce nom existe dans le même contexte
+     *
+     * @param nomDossier Nom du dossier
+     * @param membreFamilleId ID du propriétaire
+     * @param categorieId ID de la catégorie
+     * @param dossierParentId ID du parent (null pour racine)
+     * @param excludeId ID à exclure de la vérification (pour les mises à jour)
+     * @return true si le nom existe déjà
+     */
+    fun existsByNameInContext(
         nomDossier: String,
-        membreId: Int,
+        membreFamilleId: Int,
+        categorieId: Int,
+        dossierParentId: Int?,
+        excludeId: Int? = null
+    ): Boolean {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter { dossier ->
+                var condition = (dossier.nomDossier eq nomDossier.trim()) and
+                        (dossier.membreFamilleId eq membreFamilleId) and
+                        (dossier.categorieId eq categorieId)
+
+                // Gérer le parent (null ou valeur)
+                condition = if (dossierParentId == null) {
+                    condition and dossier.dossierParentId.isNull()
+                } else {
+                    condition and (dossier.dossierParentId eq dossierParentId)
+                }
+
+                // Exclure un ID spécifique (pour les mises à jour)
+                if (excludeId != null) {
+                    condition = condition and (dossier.dossierId neq excludeId)
+                }
+
+                condition
+            }
+            .toList()
+            .isNotEmpty()
+    }
+
+    /**
+     * Vérifie si déplacer un dossier créerait une boucle dans la hiérarchie
+     *
+     * @param dossierId ID du dossier à déplacer
+     * @param nouveauParentId ID du nouveau parent
+     * @return true si cela créerait une boucle
+     */
+    fun wouldCreateCycle(dossierId: Int, nouveauParentId: Int): Boolean {
+        // Parcourir la hiérarchie vers le haut depuis le nouveau parent
+        var currentParentId: Int? = nouveauParentId
+
+        while (currentParentId != null) {
+            if (currentParentId == dossierId) {
+                return true // Boucle détectée
+            }
+
+            val parent = findById(currentParentId)
+            currentParentId = parent?.dossierParentId
+        }
+
+        return false
+    }
+
+    // ================================================================
+    // MÉTHODES DE RECHERCHE AVANCÉE
+    // ================================================================
+
+    /**
+     * Recherche des dossiers par nom (recherche partielle)
+     *
+     * @param searchTerm Terme de recherche
+     * @param membreFamilleId ID du membre (optionnel)
+     * @param categorieId ID de la catégorie (optionnel)
+     * @return Liste des dossiers trouvés
+     */
+    fun searchDossiersByName(
+        searchTerm: String,
+        membreFamilleId: Int? = null,
+        categorieId: Int? = null
+    ): List<DossierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter { dossier ->
+                var condition = dossier.nomDossier like "%${searchTerm.trim()}%"
+
+                membreFamilleId?.let {
+                    condition = condition and (dossier.membreFamilleId eq it)
+                }
+                categorieId?.let {
+                    condition = condition and (dossier.categorieId eq it)
+                }
+
+                condition
+            }
+            .toList()
+            .sortedBy { it.nomDossier }
+    }
+
+    /**
+     * Récupère les dossiers créés récemment
+     *
+     * @param membreFamilleId ID du membre (optionnel)
+     * @param limit Nombre maximum de dossiers
+     * @return Liste des dossiers récents
+     */
+    fun getRecentDossiers(membreFamilleId: Int? = null, limit: Int = 10): List<DossierEntity> {
+        val dossiers = if (membreFamilleId != null) {
+            getDossiersByMembre(membreFamilleId)
+        } else {
+            findAll()
+        }
+
+        return dossiers
+            .sortedByDescending { it.dateCreationDossier ?: LocalDateTime.MIN }
+            .take(limit)
+    }
+
+    /**
+     * Récupère les dossiers par défaut d'un membre dans une catégorie
+     *
+     * @param membreFamilleId ID du membre
+     * @param categorieId ID de la catégorie
+     * @return Liste des dossiers par défaut
+     */
+    fun getDossiersParDefaut(membreFamilleId: Int, categorieId: Int): List<DossierEntity> {
+        return ArkaDatabase.instance.sequenceOf(Dossiers)
+            .filter {
+                (it.membreFamilleId eq membreFamilleId) and
+                        (it.categorieId eq categorieId) and
+                        (it.estParDefault eq true)
+            }
+            .toList()
+            .sortedBy { it.nomDossier }
+    }
+
+    // ================================================================
+    // MÉTHODES DE STATISTIQUES ET COMPTAGE
+    // ================================================================
+
+    /**
+     * Compte le nombre de fichiers dans un dossier
+     *
+     * @param dossierId ID du dossier
+     * @return Nombre de fichiers
+     */
+    fun countFichiersInDossier(dossierId: Int): Int {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { it.dossierId eq dossierId }
+            .toList()
+            .size
+    }
+
+    /**
+     * Calcule la taille totale des fichiers dans un dossier
+     *
+     * @param dossierId ID du dossier
+     * @return Taille totale en octets
+     */
+    fun getTailleTotaleFichiers(dossierId: Int): Long {
+        return ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { it.dossierId eq dossierId }
+            .toList()
+            .sumOf { it.tailleFichier }
+    }
+
+    /**
+     * Obtient les statistiques complètes d'un dossier
+     *
+     * @param dossierId ID du dossier
+     * @return Statistiques du dossier ou null si non trouvé
+     */
+    fun getStatistiquesDossier(dossierId: Int): Map<String, Any>? {
+        val dossier = findById(dossierId) ?: return null
+
+        val nombreSousDossiers = getSousDossiers(dossierId).size
+        val nombreFichiers = countFichiersInDossier(dossierId)
+        val tailleTotale = getTailleTotaleFichiers(dossierId)
+        val chemin = getCheminComplet(dossierId)
+
+        return mapOf(
+            "dossierId" to dossier.dossierId,
+            "nomDossier" to dossier.nomDossier,
+            "nombreSousDossiers" to nombreSousDossiers,
+            "nombreFichiers" to nombreFichiers,
+            "tailleTotale" to tailleTotale,
+            "profondeur" to chemin.size,
+            "estRacine" to (dossier.dossierParentId == null)
+        )
+    }
+
+    /**
+     * Obtient les statistiques de suppression (nombre d'éléments qui seront supprimés)
+     *
+     * @param dossierId ID du dossier
+     * @return Map avec les statistiques de suppression
+     */
+    fun getStatistiquesSuppression(dossierId: Int): Map<String, Int> {
+        val sousDossiers = getAllSousDosiersRecursive(dossierId)
+        val nombreSousDossiers = sousDossiers.size
+
+        // Compter tous les fichiers (dossier + sous-dossiers)
+        val tousLesDosiersIds = listOf(dossierId) + sousDossiers.map { it.dossierId }
+        val nombreFichiers = ArkaDatabase.instance.sequenceOf(Fichiers)
+            .filter { it.dossierId inList tousLesDosiersIds }
+            .toList()
+            .size
+
+        return mapOf(
+            "nombreDossiers" to (1 + nombreSousDossiers), // +1 pour le dossier lui-même
+            "nombreFichiers" to nombreFichiers
+        )
+    }
+
+    // ================================================================
+    // MÉTHODES DE CRÉATION ET MISE À JOUR
+    // ================================================================
+
+    /**
+     * Crée un nouveau dossier avec validation
+     *
+     * @param nomDossier Nom du dossier
+     * @param membreFamilleId ID du propriétaire
+     * @param categorieId ID de la catégorie
+     * @param dossierParentId ID du parent (null pour racine)
+     * @param estParDefault Si c'est un dossier par défaut
+     * @return Le dossier créé ou null en cas d'erreur
+     */
+    fun createDossier(
+        nomDossier: String,
+        membreFamilleId: Int,
         categorieId: Int,
         dossierParentId: Int? = null,
         estParDefault: Boolean = false
-    ): RepositoryResult<Dossier> {
-
-        // Validation
-        val validationErrors = validateFolderName(nomDossier)
+    ): DossierEntity? {
+        // Validation du nom
+        val validationErrors = validateNomDossier(nomDossier)
         if (validationErrors.isNotEmpty()) {
-            return RepositoryResult.ValidationError(validationErrors)
+            println("Erreurs de validation: ${validationErrors.joinToString(", ")}")
+            return null
         }
 
-        // Vérifier l'unicité dans le même contexte (membre + catégorie + parent)
-        if (folderExistsInContext(nomDossier, membreId, categorieId, dossierParentId)) {
-            return RepositoryResult.Error("Un dossier avec ce nom existe déjà dans ce contexte")
+        // Vérifier l'unicité dans le contexte
+        if (existsByNameInContext(nomDossier, membreFamilleId, categorieId, dossierParentId)) {
+            println("Un dossier avec ce nom existe déjà dans ce contexte")
+            return null
         }
 
         return try {
             val dossier = DossierEntity {
-                this.nomDossier = nomDossier
-                this.membreFamilleId = membreId
+                this.nomDossier = nomDossier.trim()
+                this.membreFamilleId = membreFamilleId
                 this.categorieId = categorieId
                 this.dossierParentId = dossierParentId
                 this.estParDefault = estParDefault
@@ -133,304 +467,151 @@ class FolderRepository : BaseRepository<DossierEntity, org.ktorm.schema.Table<Do
                 this.dateDerniereModifDossier = LocalDateTime.now()
             }
 
-            if (save(dossier)) {
-                RepositoryResult.Success(dossier.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la création du dossier")
-            }
+            create(dossier)
         } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la création: ${e.message}")
-        }
-    }
-
-    /**
-     * Met à jour un dossier
-     * @param dossierId L'ID du dossier
-     * @param nomDossier Le nouveau nom
-     * @return Le résultat de l'opération
-     */
-    fun updateFolder(dossierId: Int, nomDossier: String): RepositoryResult<Dossier> {
-        val validationErrors = validateFolderName(nomDossier)
-        if (validationErrors.isNotEmpty()) {
-            return RepositoryResult.ValidationError(validationErrors)
-        }
-
-        return try {
-            val dossier = findById(dossierId)
-            if (dossier == null) {
-                return RepositoryResult.Error("Dossier non trouvé")
-            }
-
-            // Vérifier l'unicité (sauf pour le dossier actuel)
-            if (folderExistsInContext(nomDossier, dossier.membreFamilleId, dossier.categorieId, dossier.dossierParentId, dossierId)) {
-                return RepositoryResult.Error("Un dossier avec ce nom existe déjà dans ce contexte")
-            }
-
-            dossier.nomDossier = nomDossier
-            dossier.dateDerniereModifDossier = LocalDateTime.now()
-
-            if (update(dossier)) {
-                RepositoryResult.Success(dossier.toModel())
-            } else {
-                RepositoryResult.Error("Échec de la mise à jour")
-            }
-        } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors de la mise à jour: ${e.message}")
-        }
-    }
-
-    /**
-     * Déplace un dossier vers un nouveau parent
-     * @param dossierId L'ID du dossier à déplacer
-     * @param nouveauParentId Le nouvel ID parent (null pour racine)
-     * @return Le résultat de l'opération
-     */
-    fun moveFolder(dossierId: Int, nouveauParentId: Int?): RepositoryResult<Dossier> {
-        return try {
-            val dossier = findById(dossierId)
-            if (dossier == null) {
-                return RepositoryResult.Error("Dossier non trouvé")
-            }
-
-            // Vérifier qu'on ne crée pas une boucle (dossier parent de lui-même)
-            if (nouveauParentId != null && wouldCreateCycle(dossierId, nouveauParentId)) {
-                return RepositoryResult.Error("Impossible de déplacer: cela créerait une boucle dans la hiérarchie")
-            }
-
-            // Vérifier l'unicité dans le nouveau contexte
-            if (folderExistsInContext(dossier.nomDossier, dossier.membreFamilleId, dossier.categorieId, nouveauParentId, dossierId)) {
-                return RepositoryResult.Error("Un dossier avec ce nom existe déjà dans la destination")
-            }
-
-            dossier.dossierParentId = nouveauParentId
-            dossier.dateDerniereModifDossier = LocalDateTime.now()
-
-            if (update(dossier)) {
-                RepositoryResult.Success(dossier.toModel())
-            } else {
-                RepositoryResult.Error("Échec du déplacement")
-            }
-        } catch (e: Exception) {
-            RepositoryResult.Error("Erreur lors du déplacement: ${e.message}")
-        }
-    }
-
-    /**
-     * Supprime un dossier avec tous ses sous-dossiers et fichiers (CASCADE)
-     * @param dossierId L'ID du dossier à supprimer
-     * @return Le résultat de l'opération avec statistiques
-     */
-    fun deleteFolderWithContent(dossierId: Int): RepositoryResult<FolderDeletionStats> {
-        return withTransaction {
-            try {
-                val stats = getFolderDeletionStats(dossierId)
-
-                if (stats.totalFolders == 0) {
-                    return@withTransaction RepositoryResult.Error("Dossier non trouvé")
-                }
-
-                // La suppression CASCADE est gérée par la base de données
-                val deleted = deleteById(dossierId)
-
-                if (deleted) {
-                    RepositoryResult.Success(stats)
-                } else {
-                    RepositoryResult.Error("Échec de la suppression")
-                }
-            } catch (e: Exception) {
-                RepositoryResult.Error("Erreur lors de la suppression: ${e.message}")
-            }
-        } ?: RepositoryResult.Error("Erreur de transaction")
-    }
-
-    /**
-     * Recherche des dossiers par nom
-     * @param nomPartiel Une partie du nom à rechercher
-     * @param membreId Optionnel: limiter à un membre
-     * @param categorieId Optionnel: limiter à une catégorie
-     * @return Liste des dossiers correspondants
-     */
-    fun searchByName(nomPartiel: String, membreId: Int? = null, categorieId: Int? = null): List<DossierEntity> {
-        return try {
-            var query = entities.filter { table.nomDossier like "%$nomPartiel%" }
-
-            membreId?.let { query = query.filter { table.membreFamilleId eq it } }
-            categorieId?.let { query = query.filter { table.categorieId eq it } }
-
-            query.toList()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors de la recherche par nom '$nomPartiel': ${e.message}")
-            emptyList()
-        }
-    }
-
-    /**
-     * Obtient le nombre de fichiers dans un dossier
-     * @param dossierId L'ID du dossier
-     * @return Le nombre de fichiers
-     */
-    fun getFileCount(dossierId: Int): Int {
-        return try {
-            database.from(Fichiers)
-                .select(count())
-                .where { Fichiers.dossierId eq dossierId }
-                .map { row -> row.getInt(1) }
-                .first()
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors du comptage des fichiers pour le dossier $dossierId: ${e.message}")
-            0
-        }
-    }
-
-    /**
-     * Obtient la taille totale des fichiers dans un dossier
-     * @param dossierId L'ID du dossier
-     * @return La taille totale en octets
-     */
-    fun getTotalSize(dossierId: Int): Long {
-        return try {
-            database.from(Fichiers)
-                .select(sum(Fichiers.tailleFichier))
-                .where { Fichiers.dossierId eq dossierId }
-                .map { row -> row.getLong(1) ?: 0L }
-                .first()
-        } catch (e: Exception) {
-            0L
-        }
-    }
-
-    /**
-     * Obtient les statistiques d'un dossier avec ses sous-dossiers
-     * @param dossierId L'ID du dossier
-     * @return Les statistiques complètes
-     */
-    fun getFolderStats(dossierId: Int): FolderStats? {
-        return try {
-            val dossier = findById(dossierId)?.toModel() ?: return null
-
-            val subFolders = findSubFolders(dossierId).map { it.toModel() }
-            val fileCount = getFileCount(dossierId)
-            val totalSize = getTotalSize(dossierId)
-
-            FolderStats(
-                dossier = dossier,
-                sousDossiers = subFolders,
-                nombreFichiers = fileCount,
-                tailleTotal = totalSize
-            )
-        } catch (e: Exception) {
-            println("⚠️ Erreur lors du calcul des stats pour le dossier $dossierId: ${e.message}")
+            println("Erreur lors de la création du dossier: ${e.message}")
             null
         }
     }
 
     /**
-     * Vérifie si un dossier existe dans un contexte donné
+     * Met à jour le nom d'un dossier avec validation
+     *
+     * @param dossierId ID du dossier
+     * @param nouveauNom Nouveau nom
+     * @return true si la mise à jour a réussi
      */
-    private fun folderExistsInContext(
-        nomDossier: String,
-        membreId: Int,
-        categorieId: Int,
-        parentId: Int?,
-        excludeId: Int? = null
-    ): Boolean {
+    fun updateNomDossier(dossierId: Int, nouveauNom: String): Boolean {
+        val dossier = findById(dossierId) ?: return false
+
+        // Validation du nom
+        val validationErrors = validateNomDossier(nouveauNom)
+        if (validationErrors.isNotEmpty()) {
+            return false
+        }
+
+        // Vérifier l'unicité (sauf pour le dossier actuel)
+        if (existsByNameInContext(
+                nouveauNom,
+                dossier.membreFamilleId,
+                dossier.categorieId,
+                dossier.dossierParentId,
+                dossierId
+            )) {
+            return false
+        }
+
         return try {
-            var query = entities.filter {
-                (table.nomDossier eq nomDossier) and
-                        (table.membreFamilleId eq membreId) and
-                        (table.categorieId eq categorieId)
+            val rowsAffected = ArkaDatabase.instance.update(Dossiers) {
+                set(it.nomDossier, nouveauNom.trim())
+                set(it.dateDerniereModifDossier, LocalDateTime.now())
+                where { it.dossierId eq dossierId }
             }
-
-            // Gérer le parent (null ou valeur)
-            query = if (parentId == null) {
-                query.filter { table.dossierParentId.isNull() }
-            } else {
-                query.filter { table.dossierParentId eq parentId }
-            }
-
-            // Exclure un ID spécifique (pour les mises à jour)
-            excludeId?.let { query = query.filter { table.dossierId neq it } }
-
-            query.toList().isNotEmpty()
+            rowsAffected > 0
         } catch (e: Exception) {
+            println("Erreur lors de la mise à jour du nom du dossier $dossierId: ${e.message}")
             false
         }
     }
 
     /**
-     * Vérifie si déplacer un dossier créerait une boucle
+     * Déplace un dossier vers un nouveau parent
+     *
+     * @param dossierId ID du dossier à déplacer
+     * @param nouveauParentId ID du nouveau parent (null pour racine)
+     * @return true si le déplacement a réussi
      */
-    private fun wouldCreateCycle(dossierId: Int, nouveauParentId: Int): Boolean {
+    fun deplacerDossier(dossierId: Int, nouveauParentId: Int?): Boolean {
+        val dossier = findById(dossierId) ?: return false
+
+        // Vérifier qu'on ne crée pas une boucle
+        if (nouveauParentId != null && wouldCreateCycle(dossierId, nouveauParentId)) {
+            println("Impossible de déplacer: cela créerait une boucle dans la hiérarchie")
+            return false
+        }
+
+        // Vérifier l'unicité dans le nouveau contexte
+        if (existsByNameInContext(
+                dossier.nomDossier,
+                dossier.membreFamilleId,
+                dossier.categorieId,
+                nouveauParentId,
+                dossierId
+            )) {
+            println("Un dossier avec ce nom existe déjà dans la destination")
+            return false
+        }
+
         return try {
-            // Parcourir la hiérarchie vers le haut depuis le nouveau parent
-            var currentParentId: Int? = nouveauParentId
-
-            while (currentParentId != null) {
-                if (currentParentId == dossierId) {
-                    return true // Boucle détectée
-                }
-
-                val parent = findById(currentParentId)
-                currentParentId = parent?.dossierParentId
+            val rowsAffected = ArkaDatabase.instance.update(Dossiers) {
+                set(it.dossierParentId, nouveauParentId)
+                set(it.dateDerniereModifDossier, LocalDateTime.now())
+                where { it.dossierId eq dossierId }
             }
-
+            rowsAffected > 0
+        } catch (e: Exception) {
+            println("Erreur lors du déplacement du dossier $dossierId: ${e.message}")
             false
-        } catch (e: Exception) {
-            true // En cas d'erreur, refuser pour éviter les problèmes
         }
     }
 
-    /**
-     * Calcule les statistiques de suppression avant de supprimer
-     */
-    private fun getFolderDeletionStats(dossierId: Int): FolderDeletionStats {
-        return try {
-            val totalFolders = 1 + countSubFoldersRecursive(dossierId)
-            val totalFiles = database.from(Fichiers)
-                .select(count())
-                .where { Fichiers.dossierId eq dossierId }
-                .map { row -> row.getInt(1) }
-                .first()
-
-            FolderDeletionStats(
-                totalFolders = totalFolders,
-                totalFiles = totalFiles
-            )
-        } catch (e: Exception) {
-            FolderDeletionStats(0, 0)
-        }
-    }
+    // ================================================================
+    // MÉTHODES DE SUPPRESSION
+    // ================================================================
 
     /**
-     * Compte récursivement les sous-dossiers
+     * Supprime un dossier avec cascade (tous ses sous-dossiers et fichiers)
+     * ATTENTION: Suppression définitive !
+     *
+     * @param dossierId ID du dossier
+     * @return true si la suppression a réussi
      */
-    private fun countSubFoldersRecursive(dossierId: Int): Int {
+    fun deleteDossierWithCascade(dossierId: Int): Boolean {
         return try {
-            val subFolders = findSubFolders(dossierId)
-            var count = subFolders.size
-
-            for (subFolder in subFolders) {
-                count += countSubFoldersRecursive(subFolder.dossierId)
+            transaction {
+                // La suppression cascade est gérée par les contraintes FK
+                val rowsAffected = delete(dossierId)
+                rowsAffected > 0
             }
-
-            count
         } catch (e: Exception) {
+            println("Erreur lors de la suppression du dossier $dossierId: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Supprime tous les dossiers d'un membre
+     * Utilisé lors de la suppression d'un membre
+     *
+     * @param membreFamilleId ID du membre
+     * @return Nombre de dossiers supprimés
+     */
+    fun deleteAllByMembre(membreFamilleId: Int): Int {
+        return try {
+            ArkaDatabase.instance.delete(Dossiers) {
+                it.membreFamilleId eq membreFamilleId
+            }
+        } catch (e: Exception) {
+            println("Erreur lors de la suppression des dossiers du membre $membreFamilleId: ${e.message}")
             0
         }
     }
 
+    // ================================================================
+    // MÉTHODES UTILITAIRES
+    // ================================================================
+
     /**
      * Valide le nom d'un dossier
+     *
+     * @param nomDossier Le nom à valider
+     * @return Liste des erreurs de validation
      */
-    private fun validateFolderName(nomDossier: String): List<String> {
+    fun validateNomDossier(nomDossier: String): List<String> {
         val errors = mutableListOf<String>()
 
         if (nomDossier.isBlank()) {
             errors.add("Le nom du dossier ne peut pas être vide")
-        }
-
-        if (nomDossier.length < 1) {
-            errors.add("Le nom du dossier doit contenir au moins 1 caractère")
         }
 
         if (nomDossier.length > 255) {
@@ -447,25 +628,19 @@ class FolderRepository : BaseRepository<DossierEntity, org.ktorm.schema.Table<Do
         return errors
     }
 
-    override fun validate(entity: DossierEntity): List<String> {
-        return validateFolderName(entity.nomDossier)
+    /**
+     * Nettoie les dossiers orphelins (sans catégorie ou membre valide)
+     *
+     * @return Nombre de dossiers nettoyés
+     */
+    fun cleanOrphanFolders(): Int {
+        return try {
+            // Les dossiers orphelins seront gérés par les contraintes FK CASCADE
+            // Cette méthode peut être étendue pour d'autres vérifications
+            0
+        } catch (e: Exception) {
+            println("Erreur lors du nettoyage des dossiers orphelins: ${e.message}")
+            0
+        }
     }
 }
-
-/**
- * Statistiques d'un dossier
- */
-data class FolderStats(
-    val dossier: Dossier,
-    val sousDossiers: List<Dossier>,
-    val nombreFichiers: Int,
-    val tailleTotal: Long
-)
-
-/**
- * Statistiques de suppression d'un dossier
- */
-data class FolderDeletionStats(
-    val totalFolders: Int,
-    val totalFiles: Int
-)
