@@ -1,137 +1,331 @@
 package repositories
 
-import ktorm.FamilyMember
-import ktorm.FamilyMembers
-import ktorm.toFamilyMember
-import org.ktorm.database.Database
+import org.ktorm.entity.sequenceOf
+import org.ktorm.entity.find
+import org.ktorm.entity.filter
+import org.ktorm.entity.toList
 import org.ktorm.dsl.*
+import ktorm.*
+import java.time.LocalDateTime
 
 /**
- * Repository pour gérer les opérations sur les membres de famille
+ * Repository pour la gestion des membres de famille
+ *
+ * Responsabilités:
+ * - CRUD des membres de famille
+ * - Recherche par email (utilisé par AuthController)
+ * - Gestion des rôles (admin, responsable)
+ * - Statistiques et requêtes métier
+ *
+ * Utilisé par: AuthController, FamilyMemberController
  */
-class FamilyMemberRepository(database: Database) : BaseRepository<FamilyMember, Int>(database) {
-    override val table = FamilyMembers
-    override val idColumn = FamilyMembers.familyMemberID
+class FamilyMemberRepository : BaseRepository<MembreFamilleEntity, MembresFamille>() {
+
+    override val table = MembresFamille
 
     /**
-     * Récupère tous les membres
+     * Obtient la clé primaire d'un membre
      */
-    fun findAll(): List<FamilyMember> {
-        return database.from(FamilyMembers)
-            .select()
-            .map { mapToEntity(it) }
-            .filterNotNull()
+    override fun MembreFamilleEntity.getPrimaryKey(): Int = this.membreFamilleId
+
+    /**
+     * Met à jour un membre de famille
+     */
+    override fun update(entity: MembreFamilleEntity): Int {
+        return ArkaDatabase.instance.update(MembresFamille) {
+            set(it.prenomMembre, entity.prenomMembre)
+            set(it.mailMembre, entity.mailMembre)
+            set(it.mdpMembre, entity.mdpMembre)
+            set(it.dateNaissanceMembre, entity.dateNaissanceMembre)
+            set(it.genreMembre, entity.genreMembre)
+            set(it.estResponsable, entity.estResponsable)
+            set(it.estAdmin, entity.estAdmin)
+            set(it.familleId, entity.familleId)
+            where { it.membreFamilleId eq entity.membreFamilleId }
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES SPÉCIFIQUES POUR L'AUTHENTIFICATION
+    // ================================================================
+
+    /**
+     * Trouve un membre par son adresse email
+     * CRUCIAL pour AuthController.login()
+     *
+     * @param email L'adresse email à rechercher
+     * @return Le membre trouvé ou null
+     */
+    fun findByEmail(email: String): MembreFamilleEntity? {
+        return ArkaDatabase.instance.sequenceOf(MembresFamille)
+            .find { it.mailMembre eq email.lowercase().trim() }
     }
 
     /**
-     * Récupère un membre par son ID
+     * Vérifie si un email existe déjà
+     * Utilisé pour éviter les doublons lors de l'inscription
+     *
+     * @param email L'email à vérifier
+     * @return true si l'email existe
      */
-    fun findById(id: Int): FamilyMember? {
-        return database.from(FamilyMembers)
-            .select()
-            .where { FamilyMembers.familyMemberID eq id }
-            .map { mapToEntity(it) }
-            .firstOrNull()
+    fun existsByEmail(email: String): Boolean {
+        return findByEmail(email) != null
     }
 
     /**
-     * Récupère un membre par son email
+     * Met à jour le mot de passe d'un membre
+     * Utilisé par AuthController.changePassword()
+     *
+     * @param memberId ID du membre
+     * @param newHashedPassword Nouveau mot de passe haché
+     * @return Nombre de lignes mises à jour
      */
-    fun findByEmail(email: String): FamilyMember? {
-        return database.from(FamilyMembers)
-            .select()
-            .where { FamilyMembers.familyMemberMail eq email }
-            .map { mapToEntity(it) }
-            .firstOrNull()
+    fun updatePassword(memberId: Int, newHashedPassword: String): Int {
+        return ArkaDatabase.instance.update(MembresFamille) {
+            set(it.mdpMembre, newHashedPassword)
+            where { it.membreFamilleId eq memberId }
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES DE RECHERCHE PAR FAMILLE
+    // ================================================================
+
+    /**
+     * Trouve tous les membres d'une famille
+     *
+     * @param familyId ID de la famille
+     * @return Liste des membres de la famille
+     */
+    fun findByFamilyId(familyId: Int): List<MembreFamilleEntity> {
+        return ArkaDatabase.instance.sequenceOf(MembresFamille)
+            .filter { it.familleId eq familyId }
+            .toList()
     }
 
     /**
-     * Récupère tous les membres d'une famille
+     * Trouve les administrateurs d'une famille
+     *
+     * @param familyId ID de la famille
+     * @return Liste des administrateurs
      */
-    fun findByFamilyId(familyId: Int): List<FamilyMember> {
-        return database.from(FamilyMembers)
-            .select()
-            .where { FamilyMembers.familyID eq familyId }
-            .map { mapToEntity(it) }
-            .filterNotNull()
+    fun findAdminsByFamilyId(familyId: Int): List<MembreFamilleEntity> {
+        return ArkaDatabase.instance.sequenceOf(MembresFamille)
+            .filter { (it.familleId eq familyId) and (it.estAdmin eq true) }
+            .toList()
     }
 
     /**
-     * Récupère tous les parents d'une famille
+     * Trouve les responsables d'une famille
+     *
+     * @param familyId ID de la famille
+     * @return Liste des responsables
      */
-    fun findParentsByFamilyId(familyId: Int): List<FamilyMember> {
-        return database.from(FamilyMembers)
-            .select()
-            .where { (FamilyMembers.familyID eq familyId) and (FamilyMembers.isParent eq true) }
-            .map { mapToEntity(it) }
-            .filterNotNull()
+    fun findResponsiblesByFamilyId(familyId: Int): List<MembreFamilleEntity> {
+        return ArkaDatabase.instance.sequenceOf(MembresFamille)
+            .filter { (it.familleId eq familyId) and (it.estResponsable eq true) }
+            .toList()
     }
 
     /**
-     * Récupère tous les enfants d'une famille
+     * Trouve les enfants d'une famille (ni admin ni responsable)
+     *
+     * @param familyId ID de la famille
+     * @return Liste des enfants
      */
-    fun findChildrenByFamilyId(familyId: Int): List<FamilyMember> {
-        return database.from(FamilyMembers)
-            .select()
-            .where { (FamilyMembers.familyID eq familyId) and (FamilyMembers.isParent eq false) }
-            .map { mapToEntity(it) }
-            .filterNotNull()
+    fun findChildrenByFamilyId(familyId: Int): List<MembreFamilleEntity> {
+        return ArkaDatabase.instance.sequenceOf(MembresFamille)
+            .filter {
+                (it.familleId eq familyId) and
+                        (it.estAdmin eq false) and
+                        (it.estResponsable eq false)
+            }
+            .toList()
+    }
+
+    // ================================================================
+    // MÉTHODES DE COMPTAGE ET STATISTIQUES
+    // ================================================================
+
+    /**
+     * Compte les membres d'une famille
+     *
+     * @param familyId ID de la famille
+     * @return Nombre de membres
+     */
+    fun countByFamilyId(familyId: Int): Int {
+        return countWhere { it.familleId eq familyId }
     }
 
     /**
-     * Recherche des membres par prénom
+     * Compte les administrateurs d'une famille
+     *
+     * @param familyId ID de la famille
+     * @return Nombre d'administrateurs
      */
-    fun findByFirstName(firstName: String): List<FamilyMember> {
-        return database.from(FamilyMembers)
-            .select()
-            .where { FamilyMembers.familyMemberFirstName like "%$firstName%" }
-            .map { mapToEntity(it) }
-            .filterNotNull()
+    fun countAdminsByFamilyId(familyId: Int): Int {
+        return countWhere { (it.familleId eq familyId) and (it.estAdmin eq true) }
     }
 
     /**
-     * Ajoute un nouveau membre
+     * Compte les responsables d'une famille
+     *
+     * @param familyId ID de la famille
+     * @return Nombre de responsables
      */
-    fun insert(member: FamilyMember): FamilyMember? {
-        val id = database.insertAndGenerateKey(FamilyMembers) {
-            set(it.familyMemberFirstName, member.familyMemberFirstName)
-            set(it.familyMemberMail, member.familyMemberMail)
-            set(it.familyMemberPassword, member.familyMemberPassword)
-            set(it.familyMemberBirthDate, member.familyMemberBirthDate)
-            set(it.familyMemberGender, member.familyMemberGender)
-            set(it.isParent, member.isParent)
-            set(it.isAdmin, member.isAdmin)
-            set(it.familyID, member.familyID)
-        } as Int
-
-        return findById(id)
+    fun countResponsiblesByFamilyId(familyId: Int): Int {
+        return countWhere { (it.familleId eq familyId) and (it.estResponsable eq true) }
     }
 
     /**
-     * Met à jour un membre
+     * Compte les enfants d'une famille
+     *
+     * @param familyId ID de la famille
+     * @return Nombre d'enfants
      */
-    fun update(member: FamilyMember): Int {
-        return database.update(FamilyMembers) {
-            set(it.familyMemberFirstName, member.familyMemberFirstName)
-            set(it.familyMemberMail, member.familyMemberMail)
-            set(it.familyMemberPassword, member.familyMemberPassword)
-            set(it.familyMemberBirthDate, member.familyMemberBirthDate)
-            set(it.familyMemberGender, member.familyMemberGender)
-            set(it.isParent, member.isParent)
-            set(it.isAdmin, member.isAdmin)
-            set(it.familyID, member.familyID)
-            where { it.familyMemberID eq (member.familyMemberID ?: 0) }
+    fun countChildrenByFamilyId(familyId: Int): Int {
+        return countWhere {
+            (it.familleId eq familyId) and
+                    (it.estAdmin eq false) and
+                    (it.estResponsable eq false)
+        }
+    }
+
+    // ================================================================
+    // MÉTHODES DE GESTION DES RÔLES
+    // ================================================================
+
+    /**
+     * Met à jour les rôles d'un membre
+     *
+     * @param memberId ID du membre
+     * @param isAdmin Nouveau statut admin
+     * @param isResponsible Nouveau statut responsable
+     * @return Nombre de lignes mises à jour
+     */
+    fun updateRoles(memberId: Int, isAdmin: Boolean, isResponsible: Boolean): Int {
+        return ArkaDatabase.instance.update(MembresFamille) {
+            set(it.estAdmin, isAdmin)
+            set(it.estResponsable, isResponsible)
+            where { it.membreFamilleId eq memberId }
         }
     }
 
     /**
-     * Supprime un membre
+     * Promeut un membre au rang d'administrateur
+     *
+     * @param memberId ID du membre
+     * @return Nombre de lignes mises à jour
      */
-    fun delete(id: Int): Int {
-        return database.delete(FamilyMembers) { it.familyMemberID eq id }
+    fun promoteToAdmin(memberId: Int): Int {
+        return updateRoles(memberId, isAdmin = true, isResponsible = true)
     }
 
-    override fun mapToEntity(row: QueryRowSet): FamilyMember? {
-        return row.toFamilyMember()
+    /**
+     * Révoque les privilèges administrateur d'un membre
+     *
+     * @param memberId ID du membre
+     * @return Nombre de lignes mises à jour
+     */
+    fun revokeAdminRights(memberId: Int): Int {
+        return updateRoles(memberId, isAdmin = false, isResponsible = false)
+    }
+
+    // ================================================================
+    // MÉTHODES DE RECHERCHE AVANCÉE
+    // ================================================================
+
+    /**
+     * Recherche des membres par nom (recherche partielle)
+     *
+     * @param searchTerm Terme de recherche
+     * @param familyId ID de la famille (optionnel)
+     * @return Liste des membres trouvés
+     */
+    fun searchByName(searchTerm: String, familyId: Int? = null): List<MembreFamilleEntity> {
+        return ArkaDatabase.instance.sequenceOf(MembresFamille)
+            .filter { member ->
+                val nameCondition = member.prenomMembre like "%${searchTerm.trim()}%"
+                if (familyId != null) {
+                    nameCondition and (member.familleId eq familyId)
+                } else {
+                    nameCondition
+                }
+            }
+            .toList()
+    }
+
+    /**
+     * Trouve les membres ajoutés récemment
+     *
+     * @param familyId ID de la famille
+     * @param since Date depuis laquelle chercher
+     * @return Liste des nouveaux membres
+     */
+    fun findRecentMembers(familyId: Int, since: LocalDateTime): List<MembreFamilleEntity> {
+        return ArkaDatabase.instance.sequenceOf(MembresFamille)
+            .filter {
+                (it.familleId eq familyId) and
+                        (it.dateAjoutMembre greaterEq since)
+            }
+            .toList()
+    }
+
+    /**
+     * Obtient la date de dernière activité des membres d'une famille
+     * Utilise une approche simplifiée avec entity sequence
+     *
+     * @param familyId ID de la famille
+     * @return Date de dernière activité ou null
+     */
+    fun getLastActivityByFamilyId(familyId: Int): LocalDateTime? {
+        return ArkaDatabase.instance.sequenceOf(MembresFamille)
+            .filter { it.familleId eq familyId }
+            .toList()
+            .mapNotNull { it.dateAjoutMembre }
+            .maxOrNull()
+    }
+
+    // ================================================================
+    // MÉTHODES DE VALIDATION ET VÉRIFICATION
+    // ================================================================
+
+    /**
+     * Vérifie si un membre appartient à une famille spécifique
+     *
+     * @param memberId ID du membre
+     * @param familyId ID de la famille
+     * @return true si le membre appartient à la famille
+     */
+    fun isMemberOfFamily(memberId: Int, familyId: Int): Boolean {
+        return ArkaDatabase.instance.sequenceOf(MembresFamille)
+            .find {
+                (it.membreFamilleId eq memberId) and
+                        (it.familleId eq familyId)
+            } != null
+    }
+
+    /**
+     * Vérifie si un membre a des privilèges administrateur
+     *
+     * @param memberId ID du membre
+     * @return true si le membre est admin
+     */
+    fun isAdmin(memberId: Int): Boolean {
+        return ArkaDatabase.instance.sequenceOf(MembresFamille)
+            .find { it.membreFamilleId eq memberId }
+            ?.estAdmin ?: false
+    }
+
+    /**
+     * Vérifie si un membre est responsable
+     *
+     * @param memberId ID du membre
+     * @return true si le membre est responsable
+     */
+    fun isResponsible(memberId: Int): Boolean {
+        return ArkaDatabase.instance.sequenceOf(MembresFamille)
+            .find { it.membreFamilleId eq memberId }
+            ?.estResponsable ?: false
     }
 }

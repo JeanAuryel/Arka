@@ -1,16 +1,14 @@
 pluginManagement {
     repositories {
-        maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
-        google()
         gradlePluginPortal()
+        maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
         mavenCentral()
-    }
-
-    plugins {
-        kotlin("jvm").version("2.1.20")
-        id("org.jetbrains.compose").version("1.8.0-rc01")
-        id("org.jetbrains.kotlin.plugin.compose").version("2.1.20")
+        google()
     }
 }
 
 rootProject.name = "Arka_desktop"
+
+// Message de configuration simple
+println("🔧 Arka Desktop - Test Material Icons")
+println("📦 Gradle 8.6 + Kotlin 1.9.20 + Compose 1.5.11")
