@@ -38,22 +38,33 @@ fun ArkaTopAppBar(
     navigationIcon: ImageVector? = Icons.Default.ArrowBack,
     onNavigationClick: (() -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
-    backgroundColor: Color = MaterialTheme.colors.primary,
-    contentColor: Color = contentColorFor(backgroundColor),
-    elevation: androidx.compose.ui.unit.Dp = AppBarDefaults.TopAppBarElevation
+    backgroundColor: Color = MaterialTheme.colors.surface,
+    contentColor: Color = MaterialTheme.colors.onSurface,
+    elevation: androidx.compose.ui.unit.Dp = 4.dp
 ) {
     TopAppBar(
-        modifier = modifier,
-        backgroundColor = backgroundColor,
-        contentColor = contentColor,
-        elevation = elevation
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Icône de navigation
-            if (navigationIcon != null && onNavigationClick != null) {
+        title = {
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.h6,
+                    color = contentColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                subtitle?.let {
+                    Text(
+                        text = it,
+                        style = ArkaTextStyles.helpText,
+                        color = contentColor.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        },
+        navigationIcon = if (navigationIcon != null && onNavigationClick != null) {
+            {
                 IconButton(onClick = onNavigationClick) {
                     Icon(
                         imageVector = navigationIcon,
@@ -62,113 +73,69 @@ fun ArkaTopAppBar(
                     )
                 }
             }
-
-            // Titre et sous-titre
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = if (navigationIcon != null) 0.dp else 16.dp)
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.h6,
-                    color = contentColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                subtitle?.let {
-                    Text(
-                        text = it,
-                        style = ArkaTextStyles.metadata,
-                        color = contentColor.copy(alpha = 0.7f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            // Actions
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                content = actions
-            )
-        }
-    }
+        } else null,
+        actions = actions,
+        backgroundColor = backgroundColor,
+        contentColor = contentColor,
+        elevation = elevation,
+        modifier = modifier
+    )
 }
 
 /**
- * NAVIGATION BREADCRUMB
+ * FIL D'ARIANE (BREADCRUMB)
  */
 
 /**
- * Élément de breadcrumb
+ * Élément de fil d'Ariane
  */
 data class BreadcrumbItem(
     val text: String,
-    val icon: ImageVector? = null,
     val onClick: (() -> Unit)? = null
 )
 
 /**
- * Navigation breadcrumb pour Arka
+ * Composant de fil d'Ariane pour Arka
  */
 @Composable
 fun ArkaBreadcrumb(
     items: List<BreadcrumbItem>,
     modifier: Modifier = Modifier,
     separator: ImageVector = Icons.Default.ChevronRight,
-    maxVisibleItems: Int = 5
+    maxItems: Int = 4
 ) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        elevation = 1.dp,
-        backgroundColor = MaterialTheme.colors.surface
-    ) {
+    if (items.isNotEmpty()) {
         LazyRow(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            modifier = modifier,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            val visibleItems = if (items.size > maxVisibleItems) {
-                listOf(items.first()) + listOf(
-                    BreadcrumbItem("...", Icons.Default.MoreHoriz)
-                ) + items.takeLast(maxVisibleItems - 2)
+            val displayItems = if (items.size > maxItems) {
+                listOf(items.first()) + listOf(BreadcrumbItem("...")) + items.takeLast(maxItems - 2)
             } else {
                 items
             }
 
-            items(visibleItems.size) { index ->
-                val item = visibleItems[index]
-                val isLast = index == visibleItems.lastIndex
+            items(displayItems.size) { index ->
+                val item = displayItems[index]
+                val isLast = index == displayItems.lastIndex
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Élément du breadcrumb
-                    Row(
-                        modifier = Modifier
-                            .clickable(enabled = item.onClick != null) {
-                                item.onClick?.invoke()
-                            }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        item.icon?.let {
-                            Icon(
-                                imageVector = it,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp),
-                                tint = if (isLast) {
-                                    MaterialTheme.colors.primary
-                                } else {
-                                    MaterialTheme.colors.onSurface.copy(alpha = 0.6f)
-                                }
-                            )
-                        }
-
+                    // Texte cliquable ou non
+                    if (item.onClick != null && !isLast) {
+                        Text(
+                            text = item.text,
+                            style = ArkaTextStyles.breadcrumb,
+                            color = MaterialTheme.colors.primary,
+                            fontWeight = FontWeight.Normal,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable { item.onClick.invoke() }
+                        )
+                    } else {
                         Text(
                             text = item.text,
                             style = ArkaTextStyles.breadcrumb,
@@ -292,7 +259,7 @@ private fun NavigationItemRow(
         } else {
             Color.Transparent
         },
-        shape = ArkaComponentShapes.navigationItem
+        shape = ArkaComponentShapes.cardSmall
     ) {
         Row(
             modifier = Modifier
@@ -372,12 +339,12 @@ fun ArkaTabRow(
             contentColor = contentColor,
             indicator = { tabPositions ->
                 TabRowDefaults.Indicator(
-                    Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                    modifier = Modifier.tabIndicatorOffsetCompat(tabPositions[selectedTabIndex]),
                     color = contentColor
                 )
             }
         ) {
-            TabContent(tabs, selectedTabIndex, onTabSelected)
+            ArkaTabContent(tabs, selectedTabIndex, onTabSelected)
         }
     } else {
         TabRow(
@@ -387,12 +354,12 @@ fun ArkaTabRow(
             contentColor = contentColor,
             indicator = { tabPositions ->
                 TabRowDefaults.Indicator(
-                    Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                    modifier = Modifier.tabIndicatorOffsetCompat(tabPositions[selectedTabIndex]),
                     color = contentColor
                 )
             }
         ) {
-            TabContent(tabs, selectedTabIndex, onTabSelected)
+            ArkaTabContent(tabs, selectedTabIndex, onTabSelected)
         }
     }
 }
@@ -401,7 +368,7 @@ fun ArkaTabRow(
  * Contenu des onglets
  */
 @Composable
-private fun RowScope.TabContent(
+private fun ArkaTabContent(
     tabs: List<ArkaTab>,
     selectedTabIndex: Int,
     onTabSelected: (Int) -> Unit
@@ -476,7 +443,7 @@ fun ArkaNavigationBottomSheet(
                         .height(4.dp)
                         .background(
                             color = MaterialTheme.colors.onSurface.copy(alpha = 0.3f),
-                            shape = ArkaComponentShapes.extraSmall
+                            shape = ArkaComponentShapes.cardSmall
                         )
                         .align(Alignment.CenterHorizontally)
                 )
@@ -508,7 +475,7 @@ fun ArkaNavigationBottomSheet(
                 Spacer(modifier = Modifier.height(16.dp))
             }
         },
-        sheetShape = ArkaComponentShapes.bottomSheet,
+        sheetShape = ArkaComponentShapes.cardLarge,
         modifier = modifier
     ) {
         content()
@@ -597,3 +564,17 @@ object ArkaNavigationItems {
         onClick = onClick
     )
 }
+
+/**
+ * Extension pour compatibilité tabIndicatorOffset
+ * Remplace la fonction dépréciée tabIndicatorOffset
+ */
+private fun Modifier.tabIndicatorOffsetCompat(
+    currentTabPosition: TabPosition
+): Modifier = this.then(
+    Modifier
+        .fillMaxWidth()
+        .wrapContentSize(Alignment.BottomStart)
+        .offset(x = currentTabPosition.left)
+        .width(currentTabPosition.width)
+)

@@ -35,6 +35,9 @@ val repositoryModule = module {
     single { PermissionRepository() }
     single { JournalAuditPermissionRepository() }
 
+    // ✅ REPOSITORY ALERT - FONCTIONNEL
+    single { AlertRepository() }
+
     // Repositories d'espaces (quand créés)
     // single { SpaceRepository() }
     // single { MemberSpaceRepository() }
@@ -64,14 +67,18 @@ val controllerModule = module {
     single { FamilyController(get(), get()) }      // FamilyRepository + FamilyMemberRepository
     single { FamilyMemberController(get(), get(), get()) } // FamilyMemberRepository + FamilyRepository + PasswordHasher
 
+    // ✅ CONTROLLERS PERMISSIONS ET ALERTES - FONCTIONNELS
+    single { PermissionController(get(), get(), get(), get()) } // PermissionRepository + FamilyMemberRepository + FileRepository + FolderRepository
+    single { AlertController(get(), get()) }                   // AlertRepository + AuthController
+    single { DelegationController(get(), get(), get()) }       // DelegationRequestRepository + PermissionRepository + FamilyMemberRepository
+
+    // ✅ CONTROLLER AUDIT - FONCTIONNEL
+    single { JournalAuditPermissionController(get()) }         // JournalAuditPermissionRepository
+
     // Controllers de contenu (à activer quand créés)
     // single { CategoryController(get()) }
     // single { FolderController(get(), get(), get()) }
     // single { FileController(get(), get(), get()) }
-
-    // Controllers de permissions (à activer quand créés)
-    // single { DelegationController(get(), get(), get()) }
-    // single { PermissionController(get(), get()) }
 
     // Controller principal - VERSION MINIMALE (3 services seulement)
     single { MainController(get(), get(), get()) } // SessionService + NavigationService + HealthService

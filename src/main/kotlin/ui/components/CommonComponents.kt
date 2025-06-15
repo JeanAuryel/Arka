@@ -177,16 +177,28 @@ fun ArkaCard(
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Card(
-        modifier = modifier,
-        elevation = elevation,
-        shape = shape,
-        backgroundColor = backgroundColor,
-        contentColor = contentColor,
-        border = border,
-        onClick = onClick
-    ) {
-        Column(content = content)
+    if (onClick != null) {
+        Card(
+            modifier = modifier.clickable { onClick() },
+            elevation = elevation,
+            shape = shape,
+            backgroundColor = backgroundColor,
+            contentColor = contentColor,
+            border = border
+        ) {
+            Column(content = content)
+        }
+    } else {
+        Card(
+            modifier = modifier,
+            elevation = elevation,
+            shape = shape,
+            backgroundColor = backgroundColor,
+            contentColor = contentColor,
+            border = border
+        ) {
+            Column(content = content)
+        }
     }
 }
 
@@ -254,7 +266,7 @@ fun StatCard(
                     subtitle?.let {
                         Text(
                             text = it,
-                            style = ArkaTextStyles.caption,
+                            style = ArkaTextStyles.helpText,
                             color = MaterialTheme.colors.onSurface.copy(alpha = 0.6f),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -283,7 +295,7 @@ fun StatCard(
 
                             Text(
                                 text = trendValue,
-                                style = ArkaTextStyles.caption,
+                                style = ArkaTextStyles.helpText,
                                 color = when (trend) {
                                     TrendDirection.UP -> Color(0xFF4CAF50)
                                     TrendDirection.DOWN -> Color(0xFFF44336)
@@ -316,42 +328,57 @@ fun ArkaTextField(
     trailingIcon: @Composable (() -> Unit)? = null,
     isError: Boolean = false,
     errorMessage: String? = null,
-    singleLine: Boolean = true,
-    maxLines: Int = Int.MAX_VALUE,
     enabled: Boolean = true,
     readOnly: Boolean = false,
+    singleLine: Boolean = true,
+    maxLines: Int = 1,
+    isPassword: Boolean = false,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
-    keyboardActions: KeyboardActions = KeyboardActions.Default,
-    visualTransformation: VisualTransformation = VisualTransformation.None
+    keyboardActions: KeyboardActions = KeyboardActions.Default
 ) {
+    var passwordVisible by remember { mutableStateOf(false) }
+
     Column(modifier = modifier) {
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            label = label?.let { { Text(it) } },
-            placeholder = placeholder?.let { { Text(it) } },
+            label = label?.let { { Text(text = it) } },
+            placeholder = placeholder?.let { { Text(text = it) } },
             leadingIcon = leadingIcon?.let {
                 {
                     Icon(
                         imageVector = it,
                         contentDescription = null,
-                        modifier = Modifier.size(20.dp)
+                        tint = MaterialTheme.colors.onSurface.copy(alpha = 0.6f)
                     )
                 }
             },
-            trailingIcon = trailingIcon,
+            trailingIcon = if (isPassword) {
+                {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                        Icon(
+                            imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (passwordVisible) "Masquer mot de passe" else "Afficher mot de passe"
+                        )
+                    }
+                }
+            } else trailingIcon,
             isError = isError,
-            singleLine = singleLine,
-            maxLines = maxLines,
             enabled = enabled,
             readOnly = readOnly,
+            singleLine = singleLine,
+            maxLines = maxLines,
+            visualTransformation = if (isPassword && !passwordVisible) {
+                PasswordVisualTransformation()
+            } else {
+                VisualTransformation.None
+            },
             keyboardOptions = keyboardOptions,
             keyboardActions = keyboardActions,
-            visualTransformation = visualTransformation,
             shape = ArkaComponentShapes.textFieldOutlined,
             colors = TextFieldDefaults.outlinedTextFieldColors(
                 focusedBorderColor = MaterialTheme.colors.primary,
-                unfocusedBorderColor = MaterialTheme.colors.onSurface.copy(alpha = 0.23f),
+                unfocusedBorderColor = MaterialTheme.colors.onSurface.copy(alpha = 0.12f),
                 errorBorderColor = MaterialTheme.colors.error
             ),
             modifier = Modifier.fillMaxWidth()
@@ -361,7 +388,7 @@ fun ArkaTextField(
         if (isError && errorMessage != null) {
             Text(
                 text = errorMessage,
-                style = ArkaTextStyles.errorText,
+                style = ArkaTextStyles.helpText,
                 color = MaterialTheme.colors.error,
                 modifier = Modifier.padding(start = 16.dp, top = 4.dp)
             )
@@ -370,95 +397,8 @@ fun ArkaTextField(
 }
 
 /**
- * Champ de mot de passe avec visibilité
+ * BADGES ET INDICATEURS
  */
-@Composable
-fun ArkaPasswordField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier,
-    label: String = "Mot de passe",
-    isError: Boolean = false,
-    errorMessage: String? = null,
-    enabled: Boolean = true
-) {
-    var passwordVisible by remember { mutableStateOf(false) }
-
-    ArkaTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = modifier,
-        label = label,
-        leadingIcon = Icons.Default.Lock,
-        trailingIcon = {
-            ArkaIconButton(
-                icon = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                onClick = { passwordVisible = !passwordVisible },
-                contentDescription = if (passwordVisible) "Masquer le mot de passe" else "Afficher le mot de passe"
-            )
-        },
-        isError = isError,
-        errorMessage = errorMessage,
-        enabled = enabled,
-        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions.Default.copy(
-            autoCorrect = false
-        )
-    )
-}
-
-/**
- * AVATARS ET ICÔNES
- */
-
-/**
- * Avatar utilisateur avec initiales
- */
-@Composable
-fun UserAvatar(
-    name: String,
-    modifier: Modifier = Modifier,
-    size: Dp = 40.dp,
-    backgroundColor: Color = MaterialTheme.colors.primary,
-    textColor: Color = MaterialTheme.colors.onPrimary,
-    imageUrl: String? = null
-) {
-    Box(
-        modifier = modifier
-            .size(size)
-            .clip(CircleShape)
-            .background(backgroundColor),
-        contentAlignment = Alignment.Center
-    ) {
-        // TODO: Charger l'image si imageUrl est fourni
-        if (imageUrl != null) {
-            // Placeholder pour l'image
-            Icon(
-                imageVector = Icons.Default.Person,
-                contentDescription = null,
-                tint = textColor,
-                modifier = Modifier.size(size * 0.6f)
-            )
-        } else {
-            // Afficher les initiales
-            val initials = name.split(" ")
-                .take(2)
-                .map { it.firstOrNull()?.uppercase() ?: "" }
-                .joinToString("")
-                .take(2)
-
-            Text(
-                text = initials,
-                style = MaterialTheme.typography.subtitle2.copy(
-                    fontSize = (size.value * 0.4f).sp,
-                    fontWeight = FontWeight.Medium
-                ),
-                color = textColor,
-                textAlign = TextAlign.Center
-            )
-        }
-    }
-}
 
 /**
  * Badge de statut
@@ -468,130 +408,74 @@ fun StatusBadge(
     text: String,
     modifier: Modifier = Modifier,
     backgroundColor: Color = MaterialTheme.colors.primary,
-    textColor: Color = MaterialTheme.colors.onPrimary,
-    icon: ImageVector? = null
+    textColor: Color = MaterialTheme.colors.onPrimary
 ) {
     Surface(
         modifier = modifier,
         color = backgroundColor,
-        shape = ArkaComponentShapes.badgeRound,
-        elevation = 1.dp
+        shape = ArkaComponentShapes.buttonRound,
+        contentColor = textColor
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            icon?.let {
-                Icon(
-                    imageVector = it,
-                    contentDescription = null,
-                    modifier = Modifier.size(12.dp),
-                    tint = textColor
-                )
-            }
-
-            Text(
-                text = text,
-                style = ArkaTextStyles.badge,
-                color = textColor
-            )
-        }
-    }
-}
-
-/**
- * ÉTATS VIDES ET D'ERREUR
- */
-
-/**
- * État vide avec icône et message
- */
-@Composable
-fun EmptyState(
-    icon: ImageVector,
-    title: String,
-    subtitle: String? = null,
-    modifier: Modifier = Modifier,
-    actionButton: @Composable (() -> Unit)? = null
-) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colors.onSurface.copy(alpha = 0.4f)
-        )
-
         Text(
-            text = title,
-            style = ArkaTextStyles.cardTitle,
-            color = MaterialTheme.colors.onSurface.copy(alpha = 0.7f),
+            text = text,
+            style = ArkaTextStyles.badge,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             textAlign = TextAlign.Center
         )
-
-        subtitle?.let {
-            Text(
-                text = it,
-                style = ArkaTextStyles.cardDescription,
-                color = MaterialTheme.colors.onSurface.copy(alpha = 0.5f),
-                textAlign = TextAlign.Center
-            )
-        }
-
-        actionButton?.invoke()
     }
 }
 
 /**
- * Message d'erreur avec possibilité de retry
+ * Indicateur de notification avec compteur
  */
 @Composable
-fun ErrorMessage(
-    message: String,
+fun NotificationBadge(
+    count: Int,
     modifier: Modifier = Modifier,
-    onRetry: (() -> Unit)? = null
+    maxCount: Int = 99
 ) {
-    ArkaCard(
-        modifier = modifier.fillMaxWidth(),
-        backgroundColor = MaterialTheme.colors.error.copy(alpha = 0.1f),
-        border = BorderStroke(1.dp, MaterialTheme.colors.error.copy(alpha = 0.3f))
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+    if (count > 0) {
+        Surface(
+            modifier = modifier.size(20.dp),
+            color = MaterialTheme.colors.error,
+            shape = CircleShape
         ) {
-            Icon(
-                imageVector = Icons.Default.Error,
-                contentDescription = null,
-                tint = MaterialTheme.colors.error,
-                modifier = Modifier.size(24.dp)
-            )
-
-            Text(
-                text = message,
-                style = ArkaTextStyles.cardDescription,
-                color = MaterialTheme.colors.error,
-                modifier = Modifier.weight(1f)
-            )
-
-            onRetry?.let {
-                ArkaIconButton(
-                    icon = Icons.Default.Refresh,
-                    onClick = it,
-                    contentDescription = "Réessayer",
-                    tint = MaterialTheme.colors.error
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Text(
+                    text = if (count > maxCount) "$maxCount+" else count.toString(),
+                    style = ArkaTextStyles.badge,
+                    color = MaterialTheme.colors.onError,
+                    fontSize = 10.sp,
+                    textAlign = TextAlign.Center
                 )
             }
         }
     }
+}
+
+/**
+ * DIVIDERS ET SÉPARATEURS
+ */
+
+/**
+ * Séparateur personnalisé Arka
+ */
+@Composable
+fun ArkaDivider(
+    modifier: Modifier = Modifier,
+    color: Color = MaterialTheme.colors.onSurface.copy(alpha = 0.12f),
+    thickness: Dp = 1.dp,
+    startIndent: Dp = 0.dp
+) {
+    Divider(
+        modifier = modifier,
+        color = color,
+        thickness = thickness,
+        startIndent = startIndent
+    )
 }
 
 /**
@@ -606,11 +490,78 @@ enum class TrendDirection {
 }
 
 /**
- * Tailles d'avatars prédéfinies
+ * Types d'alertes
  */
-object AvatarSizes {
-    val small = 32.dp
-    val medium = 40.dp
-    val large = 56.dp
-    val extraLarge = 72.dp
+enum class AlertType {
+    SUCCESS, WARNING, ERROR, INFO
+}
+
+/**
+ * AVATAR ET IMAGES
+ */
+
+/**
+ * Avatar d'utilisateur avec initiales
+ */
+@Composable
+fun UserAvatar(
+    name: String,
+    modifier: Modifier = Modifier,
+    size: Dp = 40.dp,
+    backgroundColor: Color = MaterialTheme.colors.primary,
+    textColor: Color = MaterialTheme.colors.onPrimary
+) {
+    val initials = name.split(" ")
+        .mapNotNull { it.firstOrNull()?.toString() }
+        .take(2)
+        .joinToString("")
+        .uppercase()
+
+    Surface(
+        modifier = modifier.size(size),
+        color = backgroundColor,
+        shape = CircleShape
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Text(
+                text = initials,
+                style = ArkaTextStyles.navigation.copy(
+                    fontSize = (size.value * 0.4).sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = textColor
+            )
+        }
+    }
+}
+
+/**
+ * Placeholder pour images
+ */
+@Composable
+fun ImagePlaceholder(
+    modifier: Modifier = Modifier,
+    icon: ImageVector = Icons.Default.Image,
+    contentDescription: String? = null
+) {
+    Surface(
+        modifier = modifier,
+        color = MaterialTheme.colors.onSurface.copy(alpha = 0.12f),
+        shape = ArkaComponentShapes.cardSmall
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                modifier = Modifier.size(48.dp),
+                tint = MaterialTheme.colors.onSurface.copy(alpha = 0.6f)
+            )
+        }
+    }
 }

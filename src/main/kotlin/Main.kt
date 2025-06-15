@@ -16,27 +16,24 @@ import androidx.compose.ui.window.application
 import ktorm.ArkaDatabase
 import utils.PasswordHasher
 import di.arkaModules
-import repositories.FamilyRepository
+import repositories.*
+import controllers.*
+import ui.routing.ArkaRouter
+import ui.routing.ArkaNavigationState
+import ui.routing.ArkaScreen
 import org.koin.core.context.startKoin
 import org.koin.core.context.stopKoin
 import org.koin.java.KoinJavaComponent.inject
 
+/**
+ * Application principale Arka avec navigation complète
+ */
 @Composable
-fun ArkaTestApp(databaseConnected: Boolean) {
-    val testResults = remember {
-        listOf(
-            TestResult("Material Icons Extended", true, "2000+ icônes disponibles"),
-            TestResult("Base de données MySQL", databaseConnected, if (databaseConnected) "Connexion active" else "Mode démo"),
-            TestResult("Système de mots de passe", databaseConnected, if (databaseConnected) "BCrypt + Migration auto" else "Prêt pour connexion"),
-            TestResult("Repositories Principaux", databaseConnected, if (databaseConnected) "Family + Member + Category" else "Non initialisés"),
-            TestResult("Repositories Contenu", databaseConnected, if (databaseConnected) "Folder + File + Template" else "Non initialisés"),
-            TestResult("Repositories Délégation", databaseConnected, if (databaseConnected) "Permission + Request" else "Non initialisés"),
-            TestResult("Controllers", databaseConnected, if (databaseConnected) "FamilyController opérationnel" else "Non initialisés"),
-            TestResult("Injection Koin", databaseConnected, if (databaseConnected) "8 repositories injectés" else "Non initialisé"),
-            TestResult("Ktorm ORM", true, "11 entités + 5 enums"),
-            TestResult("Architecture complète", databaseConnected, if (databaseConnected) "Database → Repos → Controllers → UI" else "Partiellement initialisée")
-        )
-    }
+fun ArkaApp(databaseConnected: Boolean) {
+    val navigationState = remember { ArkaNavigationState() }
+
+    // État pour mode développement/test
+    var showTestMode by remember { mutableStateOf(false) }
 
     MaterialTheme(
         colors = lightColors(
@@ -51,101 +48,236 @@ fun ArkaTestApp(databaseConnected: Boolean) {
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colors.background
         ) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(24.dp)
-            ) {
-                // En-tête Arka
-                Card(
-                    elevation = 8.dp,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(20.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.FamilyRestroom,
-                            contentDescription = "Arka Logo",
-                            tint = MaterialTheme.colors.primary,
-                            modifier = Modifier.size(48.dp)
+            if (showTestMode) {
+                // Mode test pour vérifier les dépendances
+                ArkaTestApp(
+                    databaseConnected = databaseConnected,
+                    onExitTestMode = { showTestMode = false }
+                )
+            } else {
+                // Mode application normale avec navigation
+                Column(modifier = Modifier.fillMaxSize()) {
+                    // Barre de navigation/breadcrumb (optionnelle)
+                    if (navigationState.currentScreen != ArkaScreen.LOGIN) {
+                        TopNavigationBar(
+                            navigationState = navigationState,
+                            onToggleTestMode = { showTestMode = true }
                         )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Text(
-                                "Arka v2.0 - Gestion Documents Familiaux",
-                                style = MaterialTheme.typography.h5,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colors.primary
-                            )
-                            Text(
-                                "Test des dépendances - Kotlin 1.9.20 + Compose Desktop 1.5.11",
-                                style = MaterialTheme.typography.subtitle2,
-                                color = MaterialTheme.colors.onSurface.copy(alpha = 0.7f)
-                            )
-                        }
+                    }
+
+                    // Contenu principal avec routeur
+                    Box(modifier = Modifier.weight(1f)) {
+                        ArkaRouter(
+                            navigationState = navigationState,
+                            isDatabaseConnected = databaseConnected
+                        )
                     }
                 }
+            }
+        }
+    }
+}
 
-                // Démonstration des icônes Arka
-                Card(
-                    elevation = 4.dp,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
+/**
+ * Barre de navigation supérieure avec breadcrumb
+ */
+@Composable
+private fun TopNavigationBar(
+    navigationState: ArkaNavigationState,
+    onToggleTestMode: () -> Unit
+) {
+    Card(
+        elevation = 4.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Breadcrumb
+            if (navigationState.breadcrumb.isNotEmpty()) {
+                navigationState.breadcrumb.forEachIndexed { index, item ->
+                    if (index > 0) {
+                        Icon(
+                            Icons.Default.ChevronRight,
+                            contentDescription = "Séparateur",
+                            modifier = Modifier
+                                .size(16.dp)
+                                .padding(horizontal = 4.dp),
+                            tint = MaterialTheme.colors.onSurface.copy(alpha = 0.6f)
+                        )
+                    }
+
+                    Text(
+                        text = item,
+                        style = MaterialTheme.typography.body2,
+                        color = if (index == navigationState.breadcrumb.size - 1) {
+                            MaterialTheme.colors.primary
+                        } else {
+                            MaterialTheme.colors.onSurface.copy(alpha = 0.6f)
+                        }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            // Bouton mode test (développement)
+            TextButton(onClick = onToggleTestMode) {
+                Icon(
+                    Icons.Default.BugReport,
+                    contentDescription = "Mode test",
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Test", style = MaterialTheme.typography.caption)
+            }
+        }
+    }
+}
+
+/**
+ * Interface de test des dépendances (mode développement)
+ */
+@Composable
+fun ArkaTestApp(
+    databaseConnected: Boolean,
+    onExitTestMode: () -> Unit
+) {
+    val testResults = remember {
+        listOf(
+            TestResult("Material Icons Extended", true, "2000+ icônes disponibles"),
+            TestResult("Base de données MySQL", databaseConnected, if (databaseConnected) "Connexion active" else "Mode démo"),
+            TestResult("Système de mots de passe", databaseConnected, if (databaseConnected) "BCrypt + Migration auto" else "Prêt pour connexion"),
+            TestResult("Repositories Principaux", databaseConnected, if (databaseConnected) "Family + Member + Category" else "Non initialisés"),
+            TestResult("Repositories Contenu", databaseConnected, if (databaseConnected) "Folder + File + Template" else "Non initialisés"),
+            TestResult("Repositories Délégation", databaseConnected, if (databaseConnected) "Permission + Request + Alert" else "Non initialisés"),
+            TestResult("Controllers", databaseConnected, if (databaseConnected) "Auth + Family + Alert + Delegation" else "Non initialisés"),
+            TestResult("Injection Koin", databaseConnected, if (databaseConnected) "10+ repositories + controllers injectés" else "Non initialisé"),
+            TestResult("Ktorm ORM", true, "11 entités + 5 enums + mappers"),
+            TestResult("Navigation Router", true, "15 écrans organisés en 7 modules"),
+            TestResult("Architecture complète", databaseConnected, if (databaseConnected) "Database → Repos → Controllers → Router → UI" else "Partiellement initialisée")
+        )
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp)
+    ) {
+        // En-tête avec bouton retour
+        Card(
+            elevation = 8.dp,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.padding(20.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.FamilyRestroom,
+                        contentDescription = "Arka Logo",
+                        tint = MaterialTheme.colors.primary,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "🎨 Icônes Material Extended pour Arka",
-                            style = MaterialTheme.typography.h6,
-                            fontWeight = FontWeight.Medium,
+                            "Arka v2.0 - Mode Test",
+                            style = MaterialTheme.typography.h5,
+                            fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colors.primary
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            "Test des dépendances - Kotlin 1.9.20 + Compose Desktop 1.5.11",
+                            style = MaterialTheme.typography.subtitle2,
+                            color = MaterialTheme.colors.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
 
-                        // Première rangée - Navigation principale
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            IconWithLabel(Icons.Default.Home, "Accueil")
-                            IconWithLabel(Icons.Default.Folder, "Dossiers") // ✅ Maintenant disponible !
-                            IconWithLabel(Icons.Default.FamilyRestroom, "Famille")
-                            IconWithLabel(Icons.Default.Category, "Catégories")
-                            IconWithLabel(Icons.Default.Settings, "Paramètres")
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Deuxième rangée - Actions fichiers
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            IconWithLabel(Icons.Default.InsertDriveFile, "Fichiers")
-                            IconWithLabel(Icons.Default.CloudUpload, "Upload")
-                            IconWithLabel(Icons.Default.Download, "Télécharger")
-                            IconWithLabel(Icons.Default.Share, "Partager")
-                            IconWithLabel(Icons.Default.Security, "Sécurité")
-                        }
+                    // Bouton retour
+                    Button(onClick = onExitTestMode) {
+                        Icon(Icons.Default.ExitToApp, contentDescription = "Retour")
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Retour App")
                     }
                 }
+            }
+        }
 
-                // Résultats des tests
+        // Démonstration des icônes Arka
+        Card(
+            elevation = 4.dp,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
                 Text(
-                    "📋 Tests des dépendances",
+                    "🎨 Icônes Material Extended pour Arka",
                     style = MaterialTheme.typography.h6,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colors.primary,
-                    modifier = Modifier.padding(bottom = 12.dp)
+                    color = MaterialTheme.colors.primary
                 )
+                Spacer(modifier = Modifier.height(12.dp))
 
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                // Première rangée - Navigation principale
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    items(testResults) { result ->
-                        TestResultCard(result)
-                    }
+                    IconWithLabel(Icons.Default.Home, "Accueil")
+                    IconWithLabel(Icons.Default.Folder, "Dossiers")
+                    IconWithLabel(Icons.Default.FamilyRestroom, "Famille")
+                    IconWithLabel(Icons.Default.Category, "Catégories")
+                    IconWithLabel(Icons.Default.Settings, "Paramètres")
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Deuxième rangée - Actions fichiers
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    IconWithLabel(Icons.Default.InsertDriveFile, "Fichiers")
+                    IconWithLabel(Icons.Default.CloudUpload, "Upload")
+                    IconWithLabel(Icons.Default.Download, "Télécharger")
+                    IconWithLabel(Icons.Default.Share, "Partager")
+                    IconWithLabel(Icons.Default.Security, "Sécurité")
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Troisième rangée - Notifications et admin
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    IconWithLabel(Icons.Default.Notifications, "Notifications")
+                    IconWithLabel(Icons.Default.AdminPanelSettings, "Admin")
+                    IconWithLabel(Icons.Default.Assessment, "Stats")
+                    IconWithLabel(Icons.Default.Audit, "Audit")
+                    IconWithLabel(Icons.Default.Security, "Permissions")
+                }
+            }
+        }
+
+        // Résultats des tests
+        Text(
+            "📋 Tests des dépendances et architecture",
+            style = MaterialTheme.typography.h6,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colors.primary,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(testResults) { result ->
+                TestResultCard(result)
             }
         }
     }
@@ -242,9 +374,19 @@ fun testRepositories() {
         val templateRepository: DefaultFolderTemplateRepository by inject(DefaultFolderTemplateRepository::class.java)
         val delegationRepository: DelegationRequestRepository by inject(DelegationRequestRepository::class.java)
         val permissionRepository: PermissionRepository by inject(PermissionRepository::class.java)
-        val familyController: FamilyController by inject(FamilyController::class.java)
+        val alertRepository: AlertRepository by inject(AlertRepository::class.java)
 
         println("✅ Tous les repositories injectés avec succès!")
+
+        // Test des controllers
+        val familyController: FamilyController by inject(FamilyController::class.java)
+        val authController: AuthController by inject(AuthController::class.java)
+        val alertController: AlertController by inject(AlertController::class.java)
+        val delegationController: DelegationController by inject(DelegationController::class.java)
+        val permissionController: PermissionController by inject(PermissionController::class.java)
+        val auditController: JournalAuditPermissionController by inject(JournalAuditPermissionController::class.java)
+
+        println("✅ Tous les controllers injectés avec succès!")
 
         // Tests des repositories principaux
         println("\n📊 Statistiques de la base de données:")
@@ -254,6 +396,7 @@ fun testRepositories() {
         println("   📁 Dossiers: ${folderRepository.count()}")
         println("   📄 Fichiers: ${fileRepository.count()}")
         println("   📋 Modèles de dossiers: ${templateRepository.count()}")
+        println("   🔔 Alertes: ${alertRepository.count()}")
 
         // Tests du système de délégation
         println("\n🔐 Système de délégation:")
@@ -298,19 +441,19 @@ fun testRepositories() {
             }
         }
 
-        println("\n✅ Tous les tests repositories réussis!")
+        println("\n✅ Tous les tests repositories et controllers réussis!")
 
     } catch (e: Exception) {
-        println("⚠️ Erreur lors des tests repositories: ${e.message}")
+        println("⚠️ Erreur lors des tests: ${e.message}")
         e.printStackTrace()
     }
 }
 
 fun main() = application {
     println("🚀 Arka v2.0 - Système de gestion documents familiaux")
-    println("📱 Application Desktop Compose")
-    println("🎨 Material Icons Extended + Architecture complète")
-    println("📦 Base de données + Repositories + Controllers")
+    println("📱 Application Desktop Compose avec Navigation Complète")
+    println("🎨 Material Icons Extended + Architecture Router")
+    println("📦 Base de données + Repositories + Controllers + Router")
     println("---")
 
     // 🗄️ Initialisation de la base de données Arka
@@ -351,6 +494,7 @@ fun main() = application {
 
         } catch (e: Exception) {
             println("⚠️ Erreur Koin: ${e.message}")
+            e.printStackTrace()
         }
     }
 
@@ -370,10 +514,10 @@ fun main() = application {
         },
         title = "Arka v2.0 - Gestion Documents Familiaux"
     ) {
-        ArkaTestApp(databaseInitialized)
+        ArkaApp(databaseInitialized)
     }
 
-    println("✅ Interface Arka lancée!")
-    println("📁 Architecture complète : Database → Repositories → Controllers → UI")
-}
+    println("✅ Interface Arka avec navigation complète lancée!")
+    println("📁 Architecture complète : Database → Repositories → Controllers → Router → UI")
+    println("🔄 Navigation disponible entre 15 écrans organisés")
 }
