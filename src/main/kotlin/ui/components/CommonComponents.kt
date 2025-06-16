@@ -19,6 +19,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -561,6 +562,171 @@ fun ImagePlaceholder(
                 contentDescription = contentDescription,
                 modifier = Modifier.size(48.dp),
                 tint = MaterialTheme.colors.onSurface.copy(alpha = 0.6f)
+            )
+        }
+    }
+}
+
+/**
+ * Tailles d'avatars prédéfinies
+ */
+object AvatarSizes {
+    val small = 32.dp
+    val medium = 40.dp
+    val large = 56.dp
+    val extraLarge = 72.dp
+}
+
+/**
+ * Champ de mot de passe d'Arka avec visibilité toggle
+ */
+@Composable
+fun ArkaPasswordField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    isError: Boolean = false,
+    errorMessage: String? = null,
+    enabled: Boolean = true,
+    keyboardActions: KeyboardActions = KeyboardActions.Default
+) {
+    var passwordVisible by remember { mutableStateOf(false) }
+
+    ArkaTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        label = label,
+        leadingIcon = Icons.Default.Lock,
+        trailingIcon = {
+            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                Icon(
+                    imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                    contentDescription = if (passwordVisible) "Masquer le mot de passe" else "Afficher le mot de passe"
+                )
+            }
+        },
+        isError = isError,
+        errorMessage = errorMessage,
+        enabled = enabled,
+        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions.Default.copy(
+            keyboardType = KeyboardType.Password,
+            autoCorrect = false
+        ),
+        keyboardActions = keyboardActions
+    )
+}
+
+/**
+ * Message d'erreur avec style Arka
+ */
+@Composable
+fun ErrorMessage(
+    message: String,
+    modifier: Modifier = Modifier,
+    onRetry: (() -> Unit)? = null
+) {
+    ArkaCard(
+        modifier = modifier.fillMaxWidth(),
+        backgroundColor = MaterialTheme.colors.error.copy(alpha = 0.1f),
+        border = BorderStroke(1.dp, MaterialTheme.colors.error.copy(alpha = 0.3f))
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Error,
+                contentDescription = null,
+                tint = MaterialTheme.colors.error,
+                modifier = Modifier.size(24.dp)
+            )
+
+            Text(
+                text = message,
+                style = MaterialTheme.typography.body2,
+                color = MaterialTheme.colors.error,
+                modifier = Modifier.weight(1f)
+            )
+
+            onRetry?.let {
+                ArkaIconButton(
+                    icon = Icons.Default.Refresh,
+                    onClick = it,
+                    contentDescription = "Réessayer",
+                    tint = MaterialTheme.colors.error
+                )
+            }
+        }
+    }
+}
+
+/**
+ * MISE À JOUR DE ArkaTextField pour supporter visualTransformation
+ */
+// Remplacez votre ArkaTextField existant par cette version :
+@Composable
+fun ArkaTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    placeholder: String? = null,
+    leadingIcon: ImageVector? = null,
+    trailingIcon: @Composable (() -> Unit)? = null,
+    isError: Boolean = false,
+    errorMessage: String? = null,
+    enabled: Boolean = true,
+    readOnly: Boolean = false,
+    singleLine: Boolean = true,
+    maxLines: Int = 1,
+    visualTransformation: VisualTransformation = VisualTransformation.None, // ✅ Ajouté
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default
+) {
+    Column(modifier = modifier) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = label?.let { { Text(text = it) } },
+            placeholder = placeholder?.let { { Text(text = it) } },
+            leadingIcon = leadingIcon?.let {
+                {
+                    Icon(
+                        imageVector = it,
+                        contentDescription = null,
+                        tint = MaterialTheme.colors.onSurface.copy(alpha = 0.6f)
+                    )
+                }
+            },
+            trailingIcon = trailingIcon,
+            isError = isError,
+            enabled = enabled,
+            readOnly = readOnly,
+            singleLine = singleLine,
+            maxLines = maxLines,
+            visualTransformation = visualTransformation, // ✅ Ajouté
+            keyboardOptions = keyboardOptions,
+            keyboardActions = keyboardActions,
+            shape = ArkaComponentShapes.textFieldOutlined,
+            colors = TextFieldDefaults.outlinedTextFieldColors(
+                focusedBorderColor = MaterialTheme.colors.primary,
+                unfocusedBorderColor = MaterialTheme.colors.onSurface.copy(alpha = 0.12f),
+                errorBorderColor = MaterialTheme.colors.error
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        // Message d'erreur
+        if (isError && errorMessage != null) {
+            Text(
+                text = errorMessage,
+                style = MaterialTheme.typography.caption,
+                color = MaterialTheme.colors.error,
+                modifier = Modifier.padding(start = 16.dp, top = 4.dp)
             )
         }
     }

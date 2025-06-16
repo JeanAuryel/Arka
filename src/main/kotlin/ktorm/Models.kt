@@ -287,3 +287,259 @@ data class StatistiquesPermissions(
     val nombrePermissionsExpirees: Int,
     val dernierAcces: LocalDateTime? = null
 )
+
+// ================================================================
+// ENUM POUR LES TYPES D'UTILISATEURS (basé sur estAdmin/estResponsable)
+// ================================================================
+
+/**
+ * Types d'utilisateurs dans le système Arka
+ * Basé sur les booléens estAdmin et estResponsable
+ */
+enum class TypeUtilisateur {
+    ADMIN,           // estAdmin = true
+    RESPONSABLE,     // estResponsable = true, estAdmin = false
+    MEMBRE_ORDINAIRE // estAdmin = false, estResponsable = false
+}
+
+/**
+ * Extension pour obtenir le type d'utilisateur à partir d'un MembreFamille
+ */
+fun MembreFamille.getTypeUtilisateur(): TypeUtilisateur {
+    return when {
+        estAdmin -> TypeUtilisateur.ADMIN
+        estResponsable -> TypeUtilisateur.RESPONSABLE
+        else -> TypeUtilisateur.MEMBRE_ORDINAIRE
+    }
+}
+
+/**
+ * Extension pour obtenir le libellé du rôle
+ */
+fun MembreFamille.getRoleLibelle(): String {
+    return when {
+        estAdmin -> "Administrateur"
+        estResponsable -> "Responsable"
+        else -> "Membre"
+    }
+}
+
+/**
+ * Extension pour vérifier les permissions
+ */
+fun MembreFamille.peutGererFamille(): Boolean = estAdmin || estResponsable
+fun MembreFamille.peutGererPermissions(): Boolean = estAdmin
+fun MembreFamille.peutVoirTousFichiers(): Boolean = estAdmin || estResponsable
+
+// ================================================================
+// STATISTIQUES FAMILIALES ADAPTÉES AU SYSTÈME RÉEL
+// ================================================================
+
+/**
+ * Statistiques familiales pour le dashboard
+ * Adaptées au système de rôles réel d'Arka
+ */
+data class FamilyStatistics(
+    val familyId: Int,
+    val familyName: String,
+    val memberCount: Int,
+    val adminCount: Int,           // Nombre d'admins (estAdmin = true)
+    val responsibleCount: Int,     // Nombre de responsables (estResponsable = true, estAdmin = false)
+    val ordinaryMemberCount: Int,  // Nombre de membres ordinaires
+    val activeMembers: Int,
+    val totalFiles: Int,
+    val totalFolders: Int,
+    val totalCategories: Int,
+    val totalStorageSize: Long,
+    val lastActivity: LocalDateTime?,
+    val creationDate: LocalDateTime?
+)
+
+// ================================================================
+// UTILITAIRES POUR LA GESTION DES RÔLES
+// ================================================================
+
+/**
+ * Classe utilitaire pour la gestion des rôles dans Arka
+ */
+object ArkaRoleUtils {
+
+    /**
+     * Obtient tous les admins d'une famille
+     */
+    fun List<MembreFamille>.getAdmins(): List<MembreFamille> {
+        return this.filter { it.estAdmin }
+    }
+
+    /**
+     * Obtient tous les responsables (non-admins) d'une famille
+     */
+    fun List<MembreFamille>.getResponsables(): List<MembreFamille> {
+        return this.filter { it.estResponsable && !it.estAdmin }
+    }
+
+    /**
+     * Obtient tous les membres ordinaires d'une famille
+     */
+    fun List<MembreFamille>.getMembresOrdinaires(): List<MembreFamille> {
+        return this.filter { !it.estAdmin && !it.estResponsable }
+    }
+
+    /**
+     * Obtient tous les membres avec privilèges (admins + responsables)
+     */
+    fun List<MembreFamille>.getMembresAvecPrivileges(): List<MembreFamille> {
+        return this.filter { it.estAdmin || it.estResponsable }
+    }
+
+    /**
+     * Vérifie si un membre peut accéder aux données d'un autre membre
+     */
+    fun peutAccederAux(demandeur: MembreFamille, cible: MembreFamille): Boolean {
+        return when {
+            demandeur.membreFamilleId == cible.membreFamilleId -> true // Ses propres données
+            demandeur.estAdmin -> true // Les admins peuvent tout voir
+            demandeur.estResponsable -> true // Les responsables peuvent tout voir
+            else -> false // Les membres ordinaires ne peuvent voir que leurs données
+        }
+    }
+
+    /**
+     * Vérifie si un membre peut modifier les données d'un autre membre
+     */
+    fun peutModifier(demandeur: MembreFamille, cible: MembreFamille): Boolean {
+        return when {
+            demandeur.membreFamilleId == cible.membreFamilleId -> true // Ses propres données
+            demandeur.estAdmin -> true // Les admins peuvent tout modifier
+            demandeur.estResponsable && !cible.estAdmin -> true // Les responsables peuvent modifier les non-admins
+            else -> false
+        }
+    }
+
+    /**
+     * Obtient la couleur associée au type d'utilisateur
+     */
+    fun getCouleurRole(membre: MembreFamille): androidx.compose.ui.graphics.Color {
+        return when {
+            membre.estAdmin -> androidx.compose.ui.graphics.Color(0xFFD32F2F) // Rouge pour admin
+            membre.estResponsable -> androidx.compose.ui.graphics.Color(0xFFFF9800) // Orange pour responsable
+            else -> androidx.compose.ui.graphics.Color(0xFF4CAF50) // Vert pour membre
+        }
+    }
+}
+
+// ================================================================
+// MODÈLES POUR LES STATISTIQUES DE RÔLES
+// ================================================================
+
+/**
+ * Statistiques détaillées des rôles dans une famille
+ */
+data class StatistiquesRoles(
+    val nombreAdmins: Int,
+    val nombreResponsables: Int,
+    val nombreMembresOrdinaires: Int,
+    val pourcentageAdmins: Double,
+    val pourcentageResponsables: Double,
+    val pourcentageMembresOrdinaires: Double,
+    val membresPlusActifs: List<MembreFamille>,
+    val derniereConnexionAdmin: LocalDateTime?,
+    val derniereConnexionResponsable: LocalDateTime?
+)
+
+/**
+ * Informations d'un membre avec contexte familial
+ */
+data class MembreAvecContexte(
+    val membre: MembreFamille,
+    val famille: Famille,
+    val typeUtilisateur: TypeUtilisateur,
+    val roleLibelle: String,
+    val nombreFichiersCreés: Int,
+    val nombreDossiersGérés: Int,
+    val derniereActivite: LocalDateTime?,
+    val peutGererFamille: Boolean,
+    val peutGererPermissions: Boolean
+)
+
+// ================================================================
+// VALIDATION ET BUSINESS RULES
+// ================================================================
+
+/**
+ * Règles métier pour la gestion des rôles
+ */
+object ArkaRoleValidation {
+
+    /**
+     * Vérifie qu'une famille a au moins un administrateur
+     */
+    fun validateFamilleAMinimumUnAdmin(membres: List<MembreFamille>): Boolean {
+        return membres.any { it.estAdmin }
+    }
+
+    /**
+     * Vérifie si un membre peut être supprimé (ne doit pas être le dernier admin)
+     */
+    fun peutSupprimerMembre(membreASupprimer: MembreFamille, tousLesMembres: List<MembreFamille>): Boolean {
+        if (!membreASupprimer.estAdmin) return true
+
+        val autresAdmins = tousLesMembres.filter {
+            it.estAdmin && it.membreFamilleId != membreASupprimer.membreFamilleId
+        }
+
+        return autresAdmins.isNotEmpty()
+    }
+
+    /**
+     * Vérifie si un membre peut changer le rôle d'un autre membre
+     */
+    fun peutChangerRole(demandeur: MembreFamille, cible: MembreFamille): Boolean {
+        return when {
+            demandeur.membreFamilleId == cible.membreFamilleId -> false // Pas ses propres rôles
+            !demandeur.estAdmin -> false // Seuls les admins peuvent changer les rôles
+            else -> true
+        }
+    }
+}
+
+// ================================================================
+// FACTORY POUR CRÉER DES STATISTIQUES
+// ================================================================
+
+/**
+ * Factory pour créer des statistiques familiales
+ */
+object FamilyStatisticsFactory {
+
+    fun createFromMembers(
+        famille: Famille,
+        membres: List<MembreFamille>,
+        totalFiles: Int = 0,
+        totalFolders: Int = 0,
+        totalCategories: Int = 0,
+        totalStorageSize: Long = 0L,
+        lastActivity: LocalDateTime? = null
+    ): FamilyStatistics {
+
+        val admins = membres.count { it.estAdmin }
+        val responsables = membres.count { it.estResponsable && !it.estAdmin }
+        val membresOrdinaires = membres.count { !it.estAdmin && !it.estResponsable }
+
+        return FamilyStatistics(
+            familyId = famille.familleId,
+            familyName = famille.nomFamille,
+            memberCount = membres.size,
+            adminCount = admins,
+            responsibleCount = responsables,
+            ordinaryMemberCount = membresOrdinaires,
+            activeMembers = membres.size, // Tous actifs par défaut
+            totalFiles = totalFiles,
+            totalFolders = totalFolders,
+            totalCategories = totalCategories,
+            totalStorageSize = totalStorageSize,
+            lastActivity = lastActivity,
+            creationDate = famille.dateCreationFamille
+        )
+    }
+}

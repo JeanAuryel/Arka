@@ -9,6 +9,13 @@ import androidx.compose.material.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.TabPosition
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
+import androidx.compose.ui.platform.debugInspectorInfo
 
 /**
  * Couleurs principales d'Arka
@@ -276,4 +283,30 @@ object ArkaColorUtils {
             else -> ArkaPermissionColors.pending
         }
     }
+}
+
+/**
+ * Extension pour tabIndicatorOffset (Material Design)
+ * Cette extension anime l'indicateur d'onglet lorsque l'utilisateur change d'onglet
+ */
+fun Modifier.tabIndicatorOffset(
+    currentTabPosition: TabPosition
+): Modifier = composed(
+    inspectorInfo = debugInspectorInfo {
+        name = "tabIndicatorOffset"
+        value = currentTabPosition
+    }
+) {
+    val currentTabWidth by animateDpAsState(
+        targetValue = currentTabPosition.width,
+        animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing)
+    )
+    val indicatorOffset by animateDpAsState(
+        targetValue = currentTabPosition.left,
+        animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing)
+    )
+    fillMaxWidth()
+        .wrapContentSize(androidx.compose.ui.Alignment.BottomStart)
+        .offset(x = indicatorOffset)
+        .width(currentTabWidth)
 }

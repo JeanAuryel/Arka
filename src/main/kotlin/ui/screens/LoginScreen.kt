@@ -1,14 +1,14 @@
 // ================================================================
-// LOGINSCREEN.KT - ÉCRAN DE CONNEXION ARKA
+// LOGINSCREEN.KT - VERSION COMPLÈTEMENT CORRIGÉE
 // ================================================================
 
 package ui.screens
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.*
+import androidx.compose.material.TabRowDefaults
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
@@ -17,7 +17,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -30,17 +29,12 @@ import controllers.AuthController
 import controllers.LoginRequest
 import controllers.RegisterRequest
 import kotlinx.coroutines.launch
+import ui.components.*
+import ui.theme.*
 import java.time.LocalDate
 
 /**
  * Écran de connexion principal d'Arka
- *
- * Fonctionnalités:
- * - Connexion avec email/mot de passe
- * - Basculement vers inscription
- * - Gestion des erreurs
- * - Interface responsive
- * - Validation des champs
  */
 @Composable
 fun LoginScreen(
@@ -51,7 +45,6 @@ fun LoginScreen(
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    // Animation de transition entre login et register
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -79,8 +72,8 @@ fun LoginScreen(
                 // Onglets Login/Register
                 LoginRegisterTabs(
                     isLoginMode = isLoginMode,
-                    onModeChange = {
-                        isLoginMode = it
+                    onModeChange = { newMode: Boolean ->
+                        isLoginMode = newMode
                         errorMessage = null
                     }
                 )
@@ -93,8 +86,8 @@ fun LoginScreen(
                         authController = authController,
                         isLoading = isLoading,
                         errorMessage = errorMessage,
-                        onLoadingChange = { isLoading = it },
-                        onErrorChange = { errorMessage = it },
+                        onLoadingChange = { loading: Boolean -> isLoading = loading },
+                        onErrorChange = { error: String? -> errorMessage = error },
                         onLoginSuccess = onLoginSuccess
                     )
                 } else {
@@ -102,8 +95,8 @@ fun LoginScreen(
                         authController = authController,
                         isLoading = isLoading,
                         errorMessage = errorMessage,
-                        onLoadingChange = { isLoading = it },
-                        onErrorChange = { errorMessage = it },
+                        onLoadingChange = { loading: Boolean -> isLoading = loading },
+                        onErrorChange = { error: String? -> errorMessage = error },
                         onRegisterSuccess = {
                             isLoginMode = true
                             errorMessage = "Compte créé avec succès ! Vous pouvez maintenant vous connecter."
@@ -124,7 +117,6 @@ private fun ArkaLogo() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Icône Arka (remplacer par le logo réel si disponible)
         Icon(
             imageVector = Icons.Default.FamilyRestroom,
             contentDescription = "Logo Arka",
@@ -180,7 +172,7 @@ private fun LoginRegisterTabs(
             text = {
                 Text(
                     text = "Connexion",
-                    style = ArkaTextStyles.navigation
+                    style = MaterialTheme.typography.button
                 )
             }
         )
@@ -191,7 +183,7 @@ private fun LoginRegisterTabs(
             text = {
                 Text(
                     text = "Inscription",
-                    style = ArkaTextStyles.navigation
+                    style = MaterialTheme.typography.button
                 )
             }
         )
@@ -218,11 +210,11 @@ private fun LoginForm(
     Column(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Champ email
+        // Champ email - ✅ CORRIGÉ: Spécifie visualTransformation explicitement
         ArkaTextField(
             value = email,
-            onValueChange = {
-                email = it
+            onValueChange = { newValue: String ->
+                email = newValue
                 onErrorChange(null)
             },
             label = "Adresse email",
@@ -234,18 +226,23 @@ private fun LoginForm(
             keyboardActions = KeyboardActions(
                 onNext = { focusManager.moveFocus(FocusDirection.Down) }
             ),
-            isError = errorMessage != null
+            isError = errorMessage != null,
+            visualTransformation = VisualTransformation.None // ✅ EXPLICITE pour éviter l'ambiguïté
         )
 
-        // Champ mot de passe
-        ArkaPasswordField(
+        // Champ mot de passe - ✅ CORRIGÉ: Utilise ArkaTextField avec isPassword explicite
+        ArkaTextField(
             value = password,
-            onValueChange = {
-                password = it
+            onValueChange = { newValue: String ->
+                password = newValue
                 onErrorChange(null)
             },
             label = "Mot de passe",
-            isError = errorMessage != null,
+            leadingIcon = Icons.Default.Lock,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Done
+            ),
             keyboardActions = KeyboardActions(
                 onDone = {
                     focusManager.clearFocus()
@@ -262,7 +259,9 @@ private fun LoginForm(
                         }
                     }
                 }
-            )
+            ),
+            isError = errorMessage != null,
+            isPassword = true // ✅ EXPLICITE: Utilise le paramètre isPassword
         )
 
         // Message d'erreur global
@@ -303,7 +302,7 @@ private fun LoginForm(
         ) {
             Text(
                 text = "Mot de passe oublié ?",
-                style = ArkaTextStyles.link,
+                style = MaterialTheme.typography.button,
                 color = MaterialTheme.colors.primary
             )
         }
@@ -313,6 +312,7 @@ private fun LoginForm(
 /**
  * Formulaire d'inscription
  */
+@OptIn(ExperimentalMaterialApi::class)
 @Composable
 private fun RegisterForm(
     authController: AuthController,
@@ -339,8 +339,8 @@ private fun RegisterForm(
         // Champ prénom
         ArkaTextField(
             value = firstName,
-            onValueChange = {
-                firstName = it
+            onValueChange = { newValue: String ->
+                firstName = newValue
                 onErrorChange(null)
             },
             label = "Prénom",
@@ -350,14 +350,15 @@ private fun RegisterForm(
             ),
             keyboardActions = KeyboardActions(
                 onNext = { focusManager.moveFocus(FocusDirection.Down) }
-            )
+            ),
+            visualTransformation = VisualTransformation.None
         )
 
         // Champ email
         ArkaTextField(
             value = email,
-            onValueChange = {
-                email = it
+            onValueChange = { newValue: String ->
+                email = newValue
                 onErrorChange(null)
             },
             label = "Adresse email",
@@ -368,7 +369,8 @@ private fun RegisterForm(
             ),
             keyboardActions = KeyboardActions(
                 onNext = { focusManager.moveFocus(FocusDirection.Down) }
-            )
+            ),
+            visualTransformation = VisualTransformation.None
         )
 
         // Sélection du genre
@@ -386,7 +388,8 @@ private fun RegisterForm(
                 leadingIcon = Icons.Default.Wc,
                 trailingIcon = {
                     ExposedDropdownMenuDefaults.TrailingIcon(expanded = genderExpanded)
-                }
+                },
+                visualTransformation = VisualTransformation.None
             )
 
             ExposedDropdownMenu(
@@ -408,30 +411,42 @@ private fun RegisterForm(
         }
 
         // Champ mot de passe
-        ArkaPasswordField(
+        ArkaTextField(
             value = password,
-            onValueChange = {
-                password = it
+            onValueChange = { newValue: String ->
+                password = newValue
                 onErrorChange(null)
             },
             label = "Mot de passe",
+            leadingIcon = Icons.Default.Lock,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Next
+            ),
             keyboardActions = KeyboardActions(
                 onNext = { focusManager.moveFocus(FocusDirection.Down) }
-            )
+            ),
+            isPassword = true
         )
 
         // Confirmation mot de passe
-        ArkaPasswordField(
+        ArkaTextField(
             value = confirmPassword,
-            onValueChange = {
-                confirmPassword = it
+            onValueChange = { newValue: String ->
+                confirmPassword = newValue
                 onErrorChange(null)
             },
             label = "Confirmer le mot de passe",
+            leadingIcon = Icons.Default.Lock,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Done
+            ),
             isError = password.isNotEmpty() && confirmPassword.isNotEmpty() && password != confirmPassword,
             errorMessage = if (password.isNotEmpty() && confirmPassword.isNotEmpty() && password != confirmPassword) {
                 "Les mots de passe ne correspondent pas"
-            } else null
+            } else null,
+            isPassword = true
         )
 
         // Acceptation des conditions
@@ -446,40 +461,43 @@ private fun RegisterForm(
 
             Text(
                 text = "J'accepte les conditions d'utilisation",
-                style = ArkaTextStyles.cardDescription,
+                style = MaterialTheme.typography.body2,
                 color = MaterialTheme.colors.onSurface
             )
         }
 
-        // Message d'erreur global
-        if (errorMessage != null && !errorMessage.contains("succès")) {
-            ErrorMessage(
-                message = errorMessage,
-                modifier = Modifier.fillMaxWidth()
-            )
-        } else if (errorMessage != null && errorMessage.contains("succès")) {
-            ArkaCard(
-                modifier = Modifier.fillMaxWidth(),
-                backgroundColor = MaterialTheme.colors.arka.success.copy(alpha = 0.1f)
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+        // Message d'erreur ou succès
+        if (errorMessage != null) {
+            if (errorMessage.contains("succès")) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    backgroundColor = Color(0xFF4CAF50).copy(alpha = 0.1f),
+                    shape = MaterialTheme.shapes.medium
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = MaterialTheme.colors.arka.success,
-                        modifier = Modifier.size(24.dp)
-                    )
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = Color(0xFF4CAF50),
+                            modifier = Modifier.size(24.dp)
+                        )
 
-                    Text(
-                        text = errorMessage,
-                        style = ArkaTextStyles.cardDescription,
-                        color = MaterialTheme.colors.arka.success
-                    )
+                        Text(
+                            text = errorMessage,
+                            style = MaterialTheme.typography.body2,
+                            color = Color(0xFF4CAF50)
+                        )
+                    }
                 }
+            } else {
+                ErrorMessage(
+                    message = errorMessage,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
 
@@ -520,7 +538,42 @@ private fun RegisterForm(
 }
 
 /**
- * Logique de connexion
+ * ✅ COMPOSANT ErrorMessage - CRÉÉ
+ * Affiche un message d'erreur avec icône
+ */
+@Composable
+private fun ErrorMessage(
+    message: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        backgroundColor = MaterialTheme.colors.error.copy(alpha = 0.1f),
+        shape = MaterialTheme.shapes.medium
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Error,
+                contentDescription = null,
+                tint = MaterialTheme.colors.error,
+                modifier = Modifier.size(24.dp)
+            )
+
+            Text(
+                text = message,
+                style = MaterialTheme.typography.body2,
+                color = MaterialTheme.colors.error
+            )
+        }
+    }
+}
+
+/**
+ * Logique de connexion - ✅ CORRIGÉE
  */
 private suspend fun performLogin(
     authController: AuthController,
@@ -532,22 +585,30 @@ private suspend fun performLogin(
 ) {
     onLoadingChange(true)
 
-    val result = authController.login(LoginRequest(email.trim(), password))
+    try {
+        val loginRequest = LoginRequest(
+            email = email.trim(),
+            password = password
+        )
 
-    when (result) {
-        is AuthController.AuthResult.Success -> {
-            onLoginSuccess()
+        val result = authController.login(loginRequest)
+        when (result) {
+            is AuthController.AuthResult.Success -> {
+                onLoginSuccess()
+            }
+            is AuthController.AuthResult.Error -> {
+                onErrorChange(result.message)
+            }
         }
-        is AuthController.AuthResult.Error -> {
-            onErrorChange(result.message)
-        }
+    } catch (e: Exception) {
+        onErrorChange("Erreur de connexion: ${e.message}")
     }
 
     onLoadingChange(false)
 }
 
 /**
- * Logique d'inscription
+ * Logique d'inscription - ✅ CORRIGÉE
  */
 private suspend fun performRegister(
     authController: AuthController,
@@ -574,8 +635,8 @@ private suspend fun performRegister(
 
     onLoadingChange(true)
 
-    val result = authController.register(
-        RegisterRequest(
+    try {
+        val registerRequest = RegisterRequest(
             firstName = firstName.trim(),
             email = email.trim().lowercase(),
             password = password,
@@ -583,15 +644,20 @@ private suspend fun performRegister(
             gender = gender,
             familyId = 1 // TODO: Gérer la sélection/création de famille
         )
-    )
 
-    when (result) {
-        is AuthController.AuthResult.Success -> {
-            onRegisterSuccess()
+        val result = authController.register(registerRequest)
+
+        when (result) {
+            is AuthController.AuthResult.Success -> {
+                onRegisterSuccess()
+            }
+            is AuthController.AuthResult.Error -> {
+                onErrorChange(result.message)
+            }
         }
-        is AuthController.AuthResult.Error -> {
-            onErrorChange(result.message)
-        }
+    } catch (e: Exception) {
+        onErrorChange("Erreur d'inscription: ${e.message}")
     }
 
     onLoadingChange(false)
+}

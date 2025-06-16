@@ -1,11 +1,12 @@
 // ================================================================
-// SETTINGSSCREEN.KT - CONFIGURATION UTILISATEUR
+// SETTINGSSCREEN.KT - CONFIGURATION UTILISATEUR (VERSION CORRIGÉE)
 // ================================================================
 
 package ui.screens
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
@@ -18,12 +19,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import controllers.*
 import kotlinx.coroutines.launch
 import ui.components.*
 import ui.theme.*
+import ktorm.*
 
 /**
  * Écran de configuration utilisateur
@@ -34,219 +37,18 @@ import ui.theme.*
  * - Paramètres de notifications
  * - Préférences de l'interface
  * - Paramètres de sécurité
- * - Gestion de la famille (pour les parents)
+ * - Gestion de la famille (pour les admins/responsables)
  */
-@Composable
-fun SettingsScreen(
-    authController: AuthController,
-    familyMemberController: FamilyMemberController,
-    familyController: FamilyController,
-    onNavigateBack: () -> Unit,
-    onLogout: () -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    val currentUser = authController.getCurrentUser()
 
-    // États de l'écran
-    var isLoading by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var successMessage by remember { mutableStateOf<String?>(null) }
-    var showChangePasswordDialog by remember { mutableStateOf(false) }
-    var showDeleteAccountDialog by remember { mutableStateOf(false) }
-
-    // États des paramètres
-    var notificationsEnabled by remember { mutableStateOf(true) }
-    var emailNotifications by remember { mutableStateOf(true) }
-    var darkMode by remember { mutableStateOf(false) }
-    var autoBackup by remember { mutableStateOf(true) }
-    var twoFactorAuth by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        // En-tête
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onNavigateBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Retour")
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            Text(
-                text = "Paramètres",
-                style = MaterialTheme.typography.h4,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isLoading) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator()
-            }
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Section Profil
-                item {
-                    currentUser?.let { user ->
-                        ProfileSection(
-                            user = user,
-                            onUpdateProfile = { updatedUser ->
-                                scope.launch {
-                                    isLoading = true
-                                    try {
-                                        val result = familyMemberController.updateFamilyMember(updatedUser)
-                                        when (result) {
-                                            is FamilyMemberController.FamilyMemberResult.Success -> {
-                                                successMessage = "Profil mis à jour avec succès"
-                                            }
-                                            is FamilyMemberController.FamilyMemberResult.Error -> {
-                                                errorMessage = result.message
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        errorMessage = "Erreur lors de la mise à jour: ${e.message}"
-                                    } finally {
-                                        isLoading = false
-                                    }
-                                }
-                            }
-                        )
-                    }
-                }
-
-                // Section Sécurité
-                item {
-                    SecuritySection(
-                        twoFactorEnabled = twoFactorAuth,
-                        onChangePassword = { showChangePasswordDialog = true },
-                        onToggleTwoFactor = { twoFactorAuth = it }
-                    )
-                }
-
-                // Section Notifications
-                item {
-                    NotificationSection(
-                        notificationsEnabled = notificationsEnabled,
-                        emailNotifications = emailNotifications,
-                        onToggleNotifications = { notificationsEnabled = it },
-                        onToggleEmailNotifications = { emailNotifications = it }
-                    )
-                }
-
-                // Section Interface
-                item {
-                    InterfaceSection(
-                        darkMode = darkMode,
-                        autoBackup = autoBackup,
-                        onToggleDarkMode = { darkMode = it },
-                        onToggleAutoBackup = { autoBackup = it }
-                    )
-                }
-
-                // Section Famille (pour les parents uniquement)
-                item {
-                    currentUser?.let { user ->
-                        if (user.role == RoleFamille.PARENT) {
-                            FamilyManagementSection(
-                                familyController = familyController,
-                                familyMemberController = familyMemberController,
-                                currentUser = user
-                            )
-                        }
-                    }
-                }
-
-                // Section Actions dangereuses
-                item {
-                    DangerZoneSection(
-                        onDeleteAccount = { showDeleteAccountDialog = true },
-                        onLogout = onLogout
-                    )
-                }
-            }
-        }
-
-        // Messages de feedback
-        successMessage?.let { message ->
-            LaunchedEffect(message) {
-                kotlinx.coroutines.delay(3000)
-                successMessage = null
-            }
-
-            Snackbar(
-                modifier = Modifier.padding(16.dp),
-                backgroundColor = Color.Green.copy(alpha = 0.8f)
-            ) {
-                Text(text = message, color = Color.White)
-            }
-        }
-
-        errorMessage?.let { message ->
-            LaunchedEffect(message) {
-                kotlinx.coroutines.delay(5000)
-                errorMessage = null
-            }
-
-            Snackbar(
-                modifier = Modifier.padding(16.dp),
-                backgroundColor = Color.Red.copy(alpha = 0.8f)
-            ) {
-                Text(text = message, color = Color.White)
-            }
-        }
-
-        // Dialogs
-        if (showChangePasswordDialog) {
-            ChangePasswordDialog(
-                authController = authController,
-                onDismiss = { showChangePasswordDialog = false },
-                onSuccess = {
-                    showChangePasswordDialog = false
-                    successMessage = "Mot de passe modifié avec succès"
-                },
-                onError = { error ->
-                    errorMessage = error
-                }
-            )
-        }
-
-        if (showDeleteAccountDialog) {
-            DeleteAccountDialog(
-                onDismiss = { showDeleteAccountDialog = false },
-                onConfirm = {
-                    // Logique de suppression de compte
-                    showDeleteAccountDialog = false
-                    onLogout()
-                }
-            )
-        }
-    }
-}
-
-/**
- * Section de gestion du profil
- */
 @Composable
 private fun ProfileSection(
     user: MembreFamille,
     onUpdateProfile: (MembreFamille) -> Unit
 ) {
     var isEditing by remember { mutableStateOf(false) }
-    var editedPrenom by remember { mutableStateOf(user.prenom) }
-    var editedNom by remember { mutableStateOf(user.nom) }
-    var editedEmail by remember { mutableStateOf(user.email) }
+    // ✅ Corrigé : noms des champs corrects
+    var editedPrenom by remember { mutableStateOf(user.prenomMembre) }
+    var editedEmail by remember { mutableStateOf(user.mailMembre) }
 
     SettingsSection(
         title = "Profil",
@@ -264,15 +66,6 @@ private fun ProfileSection(
             Spacer(modifier = Modifier.height(8.dp))
 
             OutlinedTextField(
-                value = editedNom,
-                onValueChange = { editedNom = it },
-                label = { Text("Nom") },
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedTextField(
                 value = editedEmail,
                 onValueChange = { editedEmail = it },
                 label = { Text("Email") },
@@ -284,11 +77,11 @@ private fun ProfileSection(
             Row {
                 Button(
                     onClick = {
+                        // ✅ Corrigé : noms des champs corrects
                         onUpdateProfile(
                             user.copy(
-                                prenom = editedPrenom,
-                                nom = editedNom,
-                                email = editedEmail
+                                prenomMembre = editedPrenom,
+                                mailMembre = editedEmail
                             )
                         )
                         isEditing = false
@@ -302,9 +95,9 @@ private fun ProfileSection(
 
                 OutlinedButton(
                     onClick = {
-                        editedPrenom = user.prenom
-                        editedNom = user.nom
-                        editedEmail = user.email
+                        // ✅ Corrigé : restaurer les valeurs originales
+                        editedPrenom = user.prenomMembre
+                        editedEmail = user.mailMembre
                         isEditing = false
                     },
                     modifier = Modifier.weight(1f)
@@ -314,10 +107,10 @@ private fun ProfileSection(
             }
         } else {
             // Mode affichage
-            ProfileInfoRow("Prénom", user.prenom)
-            ProfileInfoRow("Nom", user.nom)
-            ProfileInfoRow("Email", user.email)
-            ProfileInfoRow("Rôle", user.role.name.lowercase().replaceFirstChar { it.uppercase() })
+            // ✅ Corrigé : noms des champs corrects et utilisation de l'extension
+            ProfileInfoRow("Prénom", user.prenomMembre)
+            ProfileInfoRow("Email", user.mailMembre)
+            ProfileInfoRow("Rôle", user.getRoleLibelle()) // ✅ Extension du Models.kt
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -430,7 +223,7 @@ private fun InterfaceSection(
 }
 
 /**
- * Section de gestion familiale (pour les parents)
+ * Section de gestion familiale (pour les admins/responsables)
  */
 @Composable
 private fun FamilyManagementSection(
